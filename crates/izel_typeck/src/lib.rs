@@ -10,8 +10,20 @@ pub struct TypeChecker {
     /// Type of each expression span/id (once we have Expr IDs)
     pub expr_types: FxHashMap<usize, Type>,
     pub substitutions: FxHashMap<usize, Type>,
-    pub env: Vec<FxHashMap<String, Type>>,
+    pub env: Vec<FxHashMap<String, Scheme>>,
+    pub expected_ret: Option<Type>,
+    pub current_level: usize,
+    pub var_levels: FxHashMap<usize, usize>,
     next_var: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Scheme {
+    /// Anonymous inference variables to generalize
+    pub vars: Vec<usize>,
+    /// Named generic parameters (<T>)
+    pub names: Vec<String>,
+    pub ty: Type,
 }
 
 impl TypeChecker {
@@ -21,8 +33,19 @@ impl TypeChecker {
             expr_types: FxHashMap::default(),
             substitutions: FxHashMap::default(),
             env: vec![FxHashMap::default()], // Global scope
+            expected_ret: None,
+            current_level: 0,
+            var_levels: FxHashMap::default(),
             next_var: 0,
         }
+    }
+
+    pub fn enter_level(&mut self) {
+        self.current_level += 1;
+    }
+
+    pub fn exit_level(&mut self) {
+        self.current_level -= 1;
     }
 
     pub fn push_scope(&mut self) {
@@ -35,28 +58,40 @@ impl TypeChecker {
 
     pub fn define(&mut self, name: String, ty: Type) {
         if let Some(scope) = self.env.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, Scheme { vars: vec![], names: vec![], ty });
         }
     }
 
-    pub fn resolve_name(&self, name: &str) -> Option<Type> {
-        for scope in self.env.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                // println!("Resolved {} to {:?}", name, ty);
-                return Some(ty.clone());
-            }
+    pub fn define_scheme(&mut self, name: String, scheme: Scheme) {
+        if let Some(scope) = self.env.last_mut() {
+            scope.insert(name, scheme);
         }
-        None
+    }
+
+    pub fn resolve_name(&mut self, name: &str) -> Option<Type> {
+        let scheme = {
+            let mut found = None;
+            for scope in self.env.iter().rev() {
+                if let Some(s) = scope.get(name) {
+                    found = Some(s.clone());
+                    break;
+                }
+            }
+            found
+        };
+
+        scheme.map(|s| self.instantiate(&s))
     }
 
     pub fn new_var(&mut self) -> Type {
         let var = Type::Var(self.next_var);
+        self.var_levels.insert(self.next_var, self.current_level);
         self.next_var += 1;
         var
     }
 
     pub fn check_ast(&mut self, module: &ast::Module) {
-        // Pass 1: Collect top-level item signatures (simplified for now)
+        // Pass 1: Collect top-level item signatures
         for item in &module.items {
             self.collect_item_signature(item);
         }
@@ -66,16 +101,17 @@ impl TypeChecker {
             match item {
                 ast::Item::Forge(f) => {
                      self.push_scope();
+                     let ret_ty = self.lower_ast_type(&f.ret_type);
+                     let old_ret = self.expected_ret.replace(ret_ty.clone());
+                     
                      for param in &f.params {
                           let pty = self.lower_ast_type(&param.ty);
                           self.define(param.name.clone(), pty);
                      }
                      if let Some(body) = &f.body {
-                          // No need to push another scope for the main block if we reuse this one
-                          // But check_block normally pushes one. 
-                          // Let's just define params in the "forge" scope and let check_block push its own.
-                          self.check_block(body);
+                          self.check_block_with_expected(body, Some(&ret_ty));
                      }
+                     self.expected_ret = old_ret;
                      self.pop_scope();
                 }
                 _ => {}
@@ -86,28 +122,62 @@ impl TypeChecker {
     fn collect_item_signature(&mut self, item: &ast::Item) {
         match item {
             ast::Item::Forge(f) => {
-                let params = f.params.iter().map(|p| self.lower_ast_type(&p.ty)).collect();
+                self.push_scope();
+                // Map generic params to Type::Param
+                for gp in &f.generic_params {
+                    self.define(gp.clone(), Type::Param(gp.clone()));
+                }
+                
+                let mut params = Vec::new();
+                for p in &f.params {
+                    params.push(self.lower_ast_type(&p.ty));
+                }
                 let ret = Box::new(self.lower_ast_type(&f.ret_type));
-                self.define(f.name.clone(), Type::Function { params, ret });
+                let ty = Type::Function { params, ret };
+                
+                self.pop_scope();
+                
+                // Generalize it (it will pick up any Vars if any, but mostly we want it to be a Scheme if it has Params)
+                let scheme = self.generalize(&ty);
+                self.define_scheme(f.name.clone(), scheme);
             }
             ast::Item::Shape(s) => {
+                self.push_scope();
+                for gp in &s.generic_params {
+                    self.define(gp.clone(), Type::Param(gp.clone()));
+                }
+                
                 let mut fields = vec![];
                 for f in &s.fields {
                     fields.push((f.name.clone(), self.lower_ast_type(&f.ty)));
                 }
-                self.define(s.name.clone(), Type::Static(fields)); // Simplified to Static for now
+                let ty = Type::Static(fields);
+                self.pop_scope();
+                
+                let scheme = self.generalize(&ty);
+                self.define_scheme(s.name.clone(), scheme);
             }
             _ => {}
         }
     }
 
     fn check_block(&mut self, block: &ast::Block) {
+        self.check_block_with_expected(block, None);
+    }
+
+    fn check_block_with_expected(&mut self, block: &ast::Block, expected: Option<&Type>) {
         self.push_scope();
         for stmt in &block.stmts {
             self.check_stmt(stmt);
         }
         if let Some(expr) = &block.expr {
-            self.infer_expr(expr);
+            let ty = self.infer_expr(expr);
+            if let Some(et) = expected {
+                self.unify(&ty, et);
+            }
+        } else if let Some(et) = expected {
+            // Empty block with expected return type must be Void
+            self.unify(&Type::Prim(PrimType::Void), et);
         }
         self.pop_scope();
     }
@@ -116,6 +186,7 @@ impl TypeChecker {
         match stmt {
             ast::Stmt::Expr(e) => { self.infer_expr(e); }
             ast::Stmt::Let { name, ty, init, span: _ } => {
+                self.enter_level();
                 let mut var_ty = self.new_var();
                 if let Some(explicit_ty) = ty {
                     let et = self.lower_ast_type(explicit_ty);
@@ -125,14 +196,16 @@ impl TypeChecker {
                 if let Some(init_expr) = init {
                     let it = self.infer_expr(init_expr);
                     self.unify(&var_ty, &it);
-                    // If no explicit type, the var_ty becomes it (via unification)
                 }
-                self.define(name.clone(), var_ty);
+                self.exit_level();
+                
+                let scheme = self.generalize(&var_ty);
+                self.define_scheme(name.clone(), scheme);
             }
         }
     }
 
-    fn lower_ast_type(&self, ty: &ast::Type) -> Type {
+    fn lower_ast_type(&mut self, ty: &ast::Type) -> Type {
         match ty {
             ast::Type::Prim(s) => match s.as_str() {
                 "i32" => Type::Prim(PrimType::I32),
@@ -147,9 +220,27 @@ impl TypeChecker {
                     }
                 }
             },
-            ast::Type::Optional(inner) => Type::Optional(Box::new(self.lower_ast_type(inner))),
-            ast::Type::Cascade(inner) => Type::Cascade(Box::new(self.lower_ast_type(inner))),
-            ast::Type::Pointer(inner, m) => Type::Pointer(Box::new(self.lower_ast_type(inner)), *m),
+            ast::Type::Optional(inner) => {
+                let inner_ty = self.lower_ast_type(inner);
+                Type::Optional(Box::new(inner_ty))
+            }
+            ast::Type::Cascade(inner) => {
+                let inner_ty = self.lower_ast_type(inner);
+                Type::Cascade(Box::new(inner_ty))
+            }
+            ast::Type::Pointer(inner, m) => {
+                let inner_ty = self.lower_ast_type(inner);
+                Type::Pointer(Box::new(inner_ty), *m)
+            }
+            ast::Type::Path(parts, _gen_args) => {
+                let name = parts.join("::");
+                if let Some(t) = self.resolve_name(&name) {
+                    t
+                } else {
+                    Type::Error
+                }
+            }
+            ast::Type::SelfType => self.resolve_name("Self").unwrap_or(Type::Error),
             _ => Type::Error,
         }
     }
@@ -161,14 +252,20 @@ impl TypeChecker {
         match (&t1, &t2) {
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => true,
             (Type::Var(id), other) => {
-                self.bind_var(*id, (*other).clone());
-                true
+                self.occurs_check_and_adjust_levels(*id, other)
             }
             (other, Type::Var(id)) => {
-                self.bind_var(*id, (*other).clone());
-                true
+                self.occurs_check_and_adjust_levels(*id, other)
             }
             (Type::Prim(p1), Type::Prim(p2)) => p1 == p2,
+            (Type::Prim(PrimType::None), Type::Optional(_)) => true,
+            (Type::Optional(_), Type::Prim(PrimType::None)) => true,
+            (Type::Prim(PrimType::None), Type::Cascade(_)) => true,
+            (Type::Cascade(_), Type::Prim(PrimType::None)) => true,
+            // Cascade and Optional can unify (Cascade is a superset usually)
+            (Type::Optional(o), Type::Cascade(c)) => self.unify(o, c),
+            (Type::Cascade(c), Type::Optional(o)) => self.unify(c, o),
+            
             (Type::Static(f1), Type::Static(f2)) => {
                 if f1.len() != f2.len() { return false; }
                 for ((n1, t1), (n2, t2)) in f1.iter().zip(f2.iter()) {
@@ -179,6 +276,21 @@ impl TypeChecker {
             (Type::Optional(o1), Type::Optional(o2)) => self.unify(&o1, &o2),
             (Type::Cascade(c1), Type::Cascade(c2)) => self.unify(&c1, &c2),
             (Type::Pointer(p1, m1), Type::Pointer(p2, m2)) => m1 == m2 && self.unify(&p1, &p2),
+            (Type::Function { params: p1, ret: r1 }, Type::Function { params: p2, ret: r2 }) => {
+                if p1.len() != p2.len() { return false; }
+                for (p1, p2) in p1.iter().zip(p2.iter()) {
+                    if !self.unify(p1, p2) { return false; }
+                }
+                self.unify(r1, r2)
+            }
+            (Type::Adt(id1), Type::Adt(id2)) => id1 == id2,
+
+            // Implicit promotion (e.g. T -> ?T or T -> T!)
+            (t, Type::Optional(o)) => self.unify(t, o),
+            (t, Type::Cascade(c)) => self.unify(t, c),
+            (Type::Optional(o), t) => self.unify(o, t),
+            (Type::Cascade(c), t) => self.unify(c, t),
+            
             _ => {
                 false
             }
@@ -217,11 +329,57 @@ impl TypeChecker {
                     Type::Error
                 }
             }
-            ast::Expr::Binary(_, lhs, rhs) => {
+            ast::Expr::Binary(op, lhs, rhs) => {
                 let lt = self.infer_expr(lhs);
                 let rt = self.infer_expr(rhs);
-                self.unify(&lt, &rt);
-                lt
+                match op {
+                    ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul | ast::BinaryOp::Div => {
+                        self.unify(&lt, &Type::Prim(PrimType::I32)); // Placeholder
+                        self.unify(&rt, &Type::Prim(PrimType::I32));
+                        Type::Prim(PrimType::I32)
+                    }
+                    ast::BinaryOp::Eq | ast::BinaryOp::Ne | ast::BinaryOp::Lt | ast::BinaryOp::Gt | ast::BinaryOp::Le | ast::BinaryOp::Ge => {
+                        self.unify(&lt, &rt);
+                        Type::Prim(PrimType::Bool)
+                    }
+                    _ => {
+                        self.unify(&lt, &rt);
+                        lt
+                    }
+                }
+            }
+            ast::Expr::Unary(op, inner) => {
+                let it = self.infer_expr(inner);
+                match op {
+                    ast::UnaryOp::Neg => {
+                        self.unify(&it, &Type::Prim(PrimType::I32));
+                        it
+                    }
+                    ast::UnaryOp::Not => {
+                        self.unify(&it, &Type::Prim(PrimType::Bool));
+                        it
+                    }
+                    ast::UnaryOp::Ref(m) => Type::Pointer(Box::new(it), *m),
+                    ast::UnaryOp::Deref => {
+                        let res = self.new_var();
+                        self.unify(&it, &Type::Pointer(Box::new(res.clone()), false)); // can be mut or not
+                        res
+                    }
+                    _ => it,
+                }
+            }
+            ast::Expr::Given { cond, then_block, else_expr } => {
+                let ct = self.infer_expr(cond);
+                self.unify(&ct, &Type::Prim(PrimType::Bool));
+                let res_ty = self.new_var();
+                self.check_block_with_expected(then_block, Some(&res_ty));
+                if let Some(else_e) = else_expr {
+                    let et = self.infer_expr(else_e);
+                    self.unify(&res_ty, &et);
+                } else {
+                    self.unify(&res_ty, &Type::Prim(PrimType::Void));
+                }
+                res_ty
             }
             ast::Expr::Member(obj, field, _) => {
                 let ot = self.infer_expr(obj);
@@ -274,6 +432,14 @@ impl TypeChecker {
                 }
                 res_ty
             }
+            ast::Expr::Return(inner) => {
+                let ty = self.infer_expr(inner);
+                if let Some(target) = self.expected_ret.clone() {
+                    self.unify(&ty, &target);
+                }
+                // Return expression itself has an unconstrained type (diverges)
+                self.new_var()
+            }
             _ => self.new_var(),
         };
         // TODO: Store in expr_types
@@ -286,7 +452,7 @@ impl TypeChecker {
             ast::Pattern::Ident(name) => {
                 self.define(name.clone(), ty);
             }
-            ast::Pattern::Variant(variant, subpatterns) => {
+            ast::Pattern::Variant(_variant, subpatterns) => {
                 // Hardcoded logic for Optional and Cascade unwrapping for now
                 match ty {
                     Type::Optional(inner) | Type::Cascade(inner) => {
@@ -302,6 +468,143 @@ impl TypeChecker {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn occurs_check_and_adjust_levels(&mut self, var_id: usize, ty: &Type) -> bool {
+        let var_level = self.var_levels.get(&var_id).cloned().unwrap_or(0);
+        if !self.check_and_adjust(var_id, var_level, ty) {
+            return false;
+        }
+        self.bind_var(var_id, ty.clone());
+        true
+    }
+
+    fn check_and_adjust(&mut self, var_id: usize, var_level: usize, ty: &Type) -> bool {
+        match self.prune(ty) {
+            Type::Var(id) => {
+                if id == var_id {
+                    return false; // Recursive type
+                }
+                let other_level = self.var_levels.get(&id).cloned().unwrap_or(0);
+                if other_level > var_level {
+                    self.var_levels.insert(id, var_level);
+                }
+                true
+            }
+            Type::Function { params, ret } => {
+                for p in params {
+                    if !self.check_and_adjust(var_id, var_level, &p) { return false; }
+                }
+                self.check_and_adjust(var_id, var_level, &ret)
+            }
+            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _) => {
+                self.check_and_adjust(var_id, var_level, &inner)
+            }
+            Type::Static(fields) => {
+                for (_, t) in fields {
+                    if !self.check_and_adjust(var_id, var_level, &t) { return false; }
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
+    fn generalize(&self, ty: &Type) -> Scheme {
+        let mut vars = Vec::new();
+        let mut names = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut seen_names = std::collections::HashSet::new();
+        self.find_gen_vars(ty, &mut vars, &mut seen, &mut names, &mut seen_names);
+        Scheme { vars, names, ty: ty.clone() }
+    }
+
+    fn find_gen_vars(
+        &self, 
+        ty: &Type, 
+        vars: &mut Vec<usize>, 
+        seen: &mut std::collections::HashSet<usize>,
+        names: &mut Vec<String>,
+        seen_names: &mut std::collections::HashSet<String>,
+    ) {
+        let ty = self.prune(ty);
+        match ty {
+            Type::Var(id) => {
+                if seen.insert(id) {
+                    let level = self.var_levels.get(&id).cloned().unwrap_or(0);
+                    if level > self.current_level {
+                        vars.push(id);
+                    }
+                }
+            }
+            Type::Param(name) => {
+                if seen_names.insert(name.clone()) {
+                    names.push(name.clone());
+                }
+            }
+            Type::Function { params, ret } => {
+                for p in params {
+                    self.find_gen_vars(&p, vars, seen, names, seen_names);
+                }
+                self.find_gen_vars(&ret, vars, seen, names, seen_names);
+            }
+            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _) => {
+                self.find_gen_vars(&inner, vars, seen, names, seen_names);
+            }
+            Type::Static(fields) => {
+                for (_, t) in fields {
+                    self.find_gen_vars(&t, vars, seen, names, seen_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn instantiate(&mut self, scheme: &Scheme) -> Type {
+        let mut mapping = FxHashMap::default();
+        let mut name_mapping = FxHashMap::default();
+        for &v in &scheme.vars {
+            mapping.insert(v, self.new_var());
+        }
+        for name in &scheme.names {
+            name_mapping.insert(name.clone(), self.new_var());
+        }
+        self.substitute_scheme(&scheme.ty, &mapping, &name_mapping)
+    }
+
+    fn substitute_scheme(
+        &self, 
+        ty: &Type, 
+        mapping: &FxHashMap<usize, Type>,
+        name_mapping: &FxHashMap<String, Type>
+    ) -> Type {
+        match ty {
+            Type::Var(id) => {
+                if let Some(new_ty) = mapping.get(id) {
+                    new_ty.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Param(name) => {
+                if let Some(new_ty) = name_mapping.get(name) {
+                    new_ty.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Function { params, ret } => Type::Function {
+                params: params.iter().map(|p| self.substitute_scheme(p, mapping, name_mapping)).collect(),
+                ret: Box::new(self.substitute_scheme(ret, mapping, name_mapping)),
+            },
+            Type::Optional(inner) => Type::Optional(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),
+            Type::Cascade(inner) => Type::Cascade(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),
+            Type::Pointer(inner, m) => Type::Pointer(Box::new(self.substitute_scheme(inner, mapping, name_mapping)), *m),
+            Type::Static(fields) => Type::Static(
+                fields.iter().map(|(n, t)| (n.clone(), self.substitute_scheme(t, mapping, name_mapping))).collect()
+            ),
+            _ => ty.clone(),
         }
     }
 }

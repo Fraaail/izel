@@ -117,7 +117,7 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 - [ ] **Inference Engine**:
     - [x] Define comprehensive `Type` enum and `TypeChecker` structure.
     - [x] Implement basic unification (Algorithm W style).
-    - [ ] Implement Hindley-Milner with constraint gathering.
+    - [x] Implement Hindley-Milner with constraint gathering.
     - [ ] Implement Row-based unification for effects.
 - [ ] **Traits & Poly**:
     - [ ] Resolve `weave` bounds on generics.
