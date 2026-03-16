@@ -21,6 +21,7 @@ pub enum Type {
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
+        effects: EffectSet,
     },
     
     /// Type variables (for inference)
@@ -45,4 +46,32 @@ pub enum PrimType {
     Str,
     Void,
     None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EffectSet {
+    /// A concrete set of effects
+    Concrete(Vec<Effect>),
+    /// An effect variable (for row polymorphism)
+    Var(usize),
+    /// A row of effects + a tail (row poly)
+    Row(Vec<Effect>, Box<EffectSet>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Effect {
+    IO,
+    Alloc,
+    Mut,
+    Pure,
+    User(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct Scheme {
+    /// Anonymous inference variables to generalize
+    pub vars: Vec<usize>,
+    /// Named generic parameters (<T>)
+    pub names: Vec<String>,
+    pub ty: Type,
 }

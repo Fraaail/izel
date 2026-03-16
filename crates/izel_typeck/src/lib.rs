@@ -1,5 +1,5 @@
 pub mod type_system;
-pub use type_system::{Type, PrimType};
+pub use type_system::{Type, PrimType, Scheme, Effect, EffectSet};
 use izel_resolve::DefId;
 use izel_parser::ast;
 use rustc_hash::FxHashMap;
@@ -14,16 +14,8 @@ pub struct TypeChecker {
     pub expected_ret: Option<Type>,
     pub current_level: usize,
     pub var_levels: FxHashMap<usize, usize>,
+    pub current_effects: Vec<EffectSet>,
     next_var: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct Scheme {
-    /// Anonymous inference variables to generalize
-    pub vars: Vec<usize>,
-    /// Named generic parameters (<T>)
-    pub names: Vec<String>,
-    pub ty: Type,
 }
 
 impl TypeChecker {
@@ -36,6 +28,7 @@ impl TypeChecker {
             expected_ret: None,
             current_level: 0,
             var_levels: FxHashMap::default(),
+            current_effects: Vec::new(),
             next_var: 0,
         }
     }
@@ -108,9 +101,25 @@ impl TypeChecker {
                           let pty = self.lower_ast_type(&param.ty);
                           self.define(param.name.clone(), pty);
                      }
-                     if let Some(body) = &f.body {
-                          self.check_block_with_expected(body, Some(&ret_ty));
-                     }
+                      if let Some(body) = &f.body {
+                           self.current_effects.push(EffectSet::Concrete(vec![]));
+                           self.check_block_with_expected(body, Some(&ret_ty));
+                           let collected = self.current_effects.pop().unwrap();
+                           
+                           // Check against declared effects
+                           if let Some(sig) = self.resolve_name(&f.name) {
+                               if let Type::Function { effects: declared, .. } = self.prune(&sig) {
+                                   if let (EffectSet::Concrete(c), EffectSet::Concrete(d)) = (collected, declared) {
+                                       for effect in c {
+                                           if !d.contains(&effect) && !d.contains(&Effect::Pure) {
+                                                // TODO: Propagate Error or Warning
+                                                println!("Effect Warning: Function {} performs {:?}, but only has {:?}", f.name, effect, d);
+                                           }
+                                       }
+                                   }
+                               }
+                           }
+                      }
                      self.expected_ret = old_ret;
                      self.pop_scope();
                 }
@@ -133,7 +142,23 @@ impl TypeChecker {
                     params.push(self.lower_ast_type(&p.ty));
                 }
                 let ret = Box::new(self.lower_ast_type(&f.ret_type));
-                let ty = Type::Function { params, ret };
+                
+                let mut effects = Vec::new();
+                for e in &f.effects {
+                    effects.push(match e.as_str() {
+                        "io" => Effect::IO,
+                        "alloc" => Effect::Alloc,
+                        "mut" => Effect::Mut,
+                        "pure" => Effect::Pure,
+                        _ => Effect::User(e.clone()),
+                    });
+                }
+                
+                let ty = Type::Function { 
+                    params, 
+                    ret, 
+                    effects: EffectSet::Concrete(effects) 
+                };
                 
                 self.pop_scope();
                 
@@ -276,12 +301,15 @@ impl TypeChecker {
             (Type::Optional(o1), Type::Optional(o2)) => self.unify(&o1, &o2),
             (Type::Cascade(c1), Type::Cascade(c2)) => self.unify(&c1, &c2),
             (Type::Pointer(p1, m1), Type::Pointer(p2, m2)) => m1 == m2 && self.unify(&p1, &p2),
-            (Type::Function { params: p1, ret: r1 }, Type::Function { params: p2, ret: r2 }) => {
+            (Type::Function { params: p1, ret: r1, effects: e1 }, Type::Function { params: p2, ret: r2, effects: e2 }) => {
                 if p1.len() != p2.len() { return false; }
                 for (p1, p2) in p1.iter().zip(p2.iter()) {
                     if !self.unify(p1, p2) { return false; }
                 }
-                self.unify(r1, r2)
+                if !self.unify(r1, r2) { return false; }
+                // Effects must also unify
+                // For now, simple check
+                e1 == e2 
             }
             (Type::Adt(id1), Type::Adt(id2)) => id1 == id2,
 
@@ -294,6 +322,20 @@ impl TypeChecker {
             _ => {
                 false
             }
+        }
+    }
+
+    fn unify_effects_static(e1: &mut EffectSet, e2: &EffectSet) -> bool {
+        match (e1, e2) {
+             (EffectSet::Concrete(v1), EffectSet::Concrete(v2)) => {
+                 for e in v2 {
+                     if !v1.contains(e) { 
+                         v1.push(e.clone()); 
+                     }
+                 }
+                 true
+             }
+             _ => true, 
         }
     }
 
@@ -392,7 +434,10 @@ impl TypeChecker {
             }
             ast::Expr::Call(callee, args) => {
                 let ct = self.infer_expr(callee);
-                if let Type::Function { params, ret } = self.prune(&ct) {
+                if let Type::Function { params, ret, effects } = self.prune(&ct) {
+                     if let Some(current) = self.current_effects.last_mut() {
+                         Self::unify_effects_static(current, &effects);
+                     }
                      for (arg, pty) in args.iter().zip(params.iter()) {
                           let at = self.infer_expr(arg);
                           self.unify(&at, pty);
@@ -492,7 +537,7 @@ impl TypeChecker {
                 }
                 true
             }
-            Type::Function { params, ret } => {
+            Type::Function { params, ret, effects: _ } => {
                 for p in params {
                     if !self.check_and_adjust(var_id, var_level, &p) { return false; }
                 }
@@ -543,7 +588,7 @@ impl TypeChecker {
                     names.push(name.clone());
                 }
             }
-            Type::Function { params, ret } => {
+            Type::Function { params, ret, effects: _ } => {
                 for p in params {
                     self.find_gen_vars(&p, vars, seen, names, seen_names);
                 }
@@ -594,9 +639,10 @@ impl TypeChecker {
                     ty.clone()
                 }
             }
-            Type::Function { params, ret } => Type::Function {
+            Type::Function { params, ret, effects } => Type::Function {
                 params: params.iter().map(|p| self.substitute_scheme(p, mapping, name_mapping)).collect(),
                 ret: Box::new(self.substitute_scheme(ret, mapping, name_mapping)),
+                effects: effects.clone(), // For now
             },
             Type::Optional(inner) => Type::Optional(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),
             Type::Cascade(inner) => Type::Cascade(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),

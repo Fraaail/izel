@@ -22,6 +22,7 @@ pub struct Forge {
     pub generic_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret_type: Type,
+    pub effects: Vec<String>,
     pub body: Option<Block>,
     pub span: Span,
 }
@@ -185,6 +186,7 @@ pub enum Type {
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
+        effects: Vec<String>,
     },
     SelfType,
     Error,

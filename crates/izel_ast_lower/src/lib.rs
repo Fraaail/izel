@@ -44,6 +44,8 @@ impl<'a> Lowerer<'a> {
         let mut body = None;
         let mut generic_params = Vec::new();
 
+        let mut effects = Vec::new();
+
         for child in &node.children {
             match child {
                 SyntaxElement::Token(token) if token.kind == TokenKind::Ident => {
@@ -56,12 +58,15 @@ impl<'a> Lowerer<'a> {
                     // Simple param parsing for now
                     params.push(self.lower_param(n));
                 }
+                SyntaxElement::Node(n) if n.kind == NodeKind::Effect => {
+                    effects.push(self.lower_effect(n));
+                }
                 SyntaxElement::Node(n) if n.kind == NodeKind::Block => {
                     body = Some(self.lower_block(n));
                 }
                 SyntaxElement::Node(n) => {
-                    // Could be the return type if it's not a block/params
-                    if !matches!(n.kind, NodeKind::ParamPart | NodeKind::Block | NodeKind::GenericParams) {
+                    // Could be the return type if it's not a block/params/effect/generic
+                    if !matches!(n.kind, NodeKind::ParamPart | NodeKind::Block | NodeKind::GenericParams | NodeKind::Effect) {
                         ret_type = self.lower_type(n);
                     }
                 }
@@ -74,6 +79,7 @@ impl<'a> Lowerer<'a> {
             generic_params,
             params,
             ret_type,
+            effects,
             body,
             span: node.span(),
         }
@@ -205,6 +211,14 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 ast::Stmt::Let { name, ty, init, span: node.span() }
+            }
+            NodeKind::ExprStmt => {
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        return ast::Stmt::Expr(self.lower_expr(n));
+                    }
+                }
+                ast::Stmt::Expr(ast::Expr::Literal(ast::Literal::Nil))
             }
             _ => ast::Stmt::Expr(self.lower_expr(node)),
         }
@@ -643,5 +657,16 @@ impl<'a> Lowerer<'a> {
         }
 
         ast::Impl { target, weave, items, span: node.span() }
+    }
+
+    fn lower_effect(&self, node: &SyntaxNode) -> String {
+        for child in &node.children {
+            if let SyntaxElement::Token(t) = child {
+                if t.kind == TokenKind::Ident {
+                    return self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                }
+            }
+        }
+        String::new()
     }
 }

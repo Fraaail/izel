@@ -1,0 +1,11 @@
+forge log(msg: str) !io {
+    // Internal IO magic
+}
+
+forge my_pure_func() {
+    log("hello") // Should trigger a type checker warning: log is !io, my_pure_func is pure
+}
+
+forge main() {
+    my_pure_func()
+}

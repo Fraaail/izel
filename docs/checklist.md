@@ -55,7 +55,7 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Implement `Codegen` struct to walk the CST/AST.
 - [x] **Forge Generation**:
     - [x] Direct mapping of `forge` to LLVM `Function`.
-    - [x] Basic `i32` arithmetic and `return` generation.
+    - [x] Basic `i32` arithmetic and `return` generation (Supports basic JIT execution).
 - [x] **Verification**:
     - [x] Output human-readable `.ll` (LLVM Assembly).
     - [x] JIT execution of `main` for smoke tests.
@@ -125,7 +125,7 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [ ] Implement orphan rule check (coherence).
 - [ ] **Effect System**:
     - [ ] Transitive effect discovery (e.g., `f` calls `g !io` -> `f` is `!io`).
-    - [ ] Check `forge f() !effect` annotations at call sites.
+    - [x] Check `forge f() !effect` annotations at call sites.
 
 ### 2.2 `izel_borrow` (Ownership System)
 - [ ] **Ownership Tracking**:

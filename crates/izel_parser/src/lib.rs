@@ -18,15 +18,11 @@ impl Parser {
 
     /// Parses the entire token stream into a SourceFile CST node.
     pub fn parse_source_file(&mut self) -> SyntaxNode {
-        let mut children = Vec::new();
-        
+        let mut children = vec![];
         while self.current_kind() != TokenKind::Eof {
             children.push(SyntaxElement::Node(self.parse_decl()));
+            children.extend(self.eat_trivia().into_iter());
         }
-        
-        // Add EOF and any remaining items
-        children.push(SyntaxElement::Token(self.bump()));
-        
         SyntaxNode::new(NodeKind::SourceFile, children)
     }
 
@@ -81,7 +77,7 @@ impl Parser {
         
         children.extend(self.eat_trivia().into_iter());
         if self.current_kind() == TokenKind::Lt {
-             children.push(SyntaxElement::Node(self.parse_generic_params()));
+            children.push(SyntaxElement::Node(self.parse_generic_params()));
         }
 
         // Params
@@ -109,6 +105,10 @@ impl Parser {
             children.extend(self.eat_trivia().into_iter());
             children.push(SyntaxElement::Node(self.parse_type()));
         }
+
+        // Effects
+        children.extend(self.eat_trivia().into_iter());
+        children.extend(self.parse_effects().into_iter());
 
         // Block
         children.extend(self.eat_trivia().into_iter());
@@ -468,6 +468,7 @@ impl Parser {
         let mut children = self.eat_trivia();
         if self.current_kind() == TokenKind::OpenBrace {
             children.push(SyntaxElement::Token(self.bump()));
+            children.extend(self.eat_trivia().into_iter());
             while self.current_kind() != TokenKind::CloseBrace && self.current_kind() != TokenKind::Eof {
                 children.push(SyntaxElement::Node(self.parse_stmt()));
                 children.extend(self.eat_trivia().into_iter());
@@ -597,5 +598,18 @@ impl Parser {
             self.pos += 1;
         }
         token
+    }
+
+    fn parse_effects(&mut self) -> Vec<SyntaxElement> {
+        let mut results = vec![];
+        while self.current_kind() == TokenKind::Bang {
+             let mut inner = vec![SyntaxElement::Token(self.bump())];
+             if self.current_kind() == TokenKind::Ident {
+                 inner.push(SyntaxElement::Token(self.bump()));
+             }
+             results.push(SyntaxElement::Node(SyntaxNode::new(NodeKind::Effect, inner)));
+             results.extend(self.eat_trivia().into_iter());
+        }
+        results
     }
 }

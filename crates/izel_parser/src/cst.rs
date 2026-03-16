@@ -23,6 +23,7 @@ pub enum NodeKind {
     Param,
     ReturnPart,
     Block,
+    Effect, // Added Effect variant here
     
     // Statements
     LetStmt,
