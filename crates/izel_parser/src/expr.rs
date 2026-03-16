@@ -95,7 +95,7 @@ impl Parser {
                 children.push(SyntaxElement::Token(self.bump()));
                 SyntaxNode::new(NodeKind::Literal, children)
             }
-            TokenKind::Ident => {
+            TokenKind::Ident | TokenKind::SelfKw | TokenKind::SelfType => {
                 children.push(SyntaxElement::Token(self.bump()));
                 SyntaxNode::new(NodeKind::Ident, children)
             }

@@ -15,8 +15,11 @@ pub struct Symbol {
     pub name: String,
     pub span: Span,
     pub def_id: DefId,
+    pub is_module: bool,
+    pub module_scope: Option<Arc<Scope>>,
 }
 
+#[derive(Debug)]
 pub struct Scope {
     pub symbols: RefCell<FxHashMap<String, Symbol>>,
     pub parent: Option<Arc<Scope>>,
@@ -31,7 +34,12 @@ impl Scope {
     }
 
     pub fn define(&self, name: String, span: Span, def_id: DefId) {
-        let symbol = Symbol { name: name.clone(), span, def_id };
+        let symbol = Symbol { name: name.clone(), span, def_id, is_module: false, module_scope: None };
+        self.symbols.borrow_mut().insert(name, symbol);
+    }
+
+    pub fn define_module(&self, name: String, span: Span, def_id: DefId, scope: Arc<Scope>) {
+        let symbol = Symbol { name: name.clone(), span, def_id, is_module: true, module_scope: Some(scope) };
         self.symbols.borrow_mut().insert(name, symbol);
     }
 
@@ -43,6 +51,19 @@ impl Scope {
             return parent.resolve(name);
         }
         None
+    }
+
+    pub fn resolve_local(&self, name: &str) -> Option<Symbol> {
+        self.symbols.borrow().get(name).cloned()
+    }
+
+    pub fn merge_scope(&self, other: &Scope) {
+        let mut symbols = self.symbols.borrow_mut();
+        for (name, sym) in other.symbols.borrow().iter() {
+            if !symbols.contains_key(name) {
+                symbols.insert(name.clone(), sym.clone());
+            }
+        }
     }
 }
 
@@ -184,22 +205,67 @@ impl Resolver {
 
         if let Some((name, span)) = name_info {
             let id = self.next_id();
-            self.current_scope.define(name, span, id);
+            let new_scope = Arc::new(Scope::new(Some(self.current_scope.clone())));
+            self.current_scope.define_module(name, span, id, new_scope.clone());
             
             // Push scope
             let parent = self.current_scope.clone();
-            self.current_scope = Arc::new(Scope::new(Some(parent)));
+            self.current_scope = new_scope;
             
             // Resolve elements inside the ward
             self.resolve_children(node, source);
             
             // Pop scope
-            let parent = self.current_scope.parent.clone().expect("Ward scope must have parent");
             self.current_scope = parent;
         }
     }
 
-    fn resolve_draw_decl(&mut self, _node: &SyntaxNode, _source: &str) {
-        // TODO: Implement dependency graph building
+    fn resolve_draw_decl(&mut self, node: &SyntaxNode, source: &str) {
+        let mut path = vec![];
+        let mut is_wildcard = false;
+
+        for child in &node.children {
+            if let SyntaxElement::Token(t) = child {
+                match t.kind {
+                    TokenKind::Ident => {
+                        let name = source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                        path.push((name, t.span));
+                    }
+                    TokenKind::Star => {
+                        is_wildcard = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if path.is_empty() { return; }
+
+        let mut current_scope = self.current_scope.clone();
+        
+        // Traverse/Build path
+        for (i, (name, span)) in path.iter().enumerate() {
+            let is_last = i == path.len() - 1;
+            
+            let symbol = current_scope.resolve_local(name);
+            match symbol {
+                Some(sym) if sym.is_module => {
+                    current_scope = sym.module_scope.clone().unwrap();
+                }
+                None => {
+                    let id = self.next_id();
+                    let new_mod_scope = Arc::new(Scope::new(None)); // Dummy or loaded module
+                    current_scope.define_module(name.clone(), *span, id, new_mod_scope.clone());
+                    current_scope = new_mod_scope;
+                }
+                _ => {
+                    // Symbol exists but is not a module, error or handle as re-export
+                }
+            }
+
+            if is_last && is_wildcard {
+                self.current_scope.merge_scope(&current_scope);
+            }
+        }
     }
 }

@@ -1,0 +1,46 @@
+draw std::io;
+
+ward math {
+    open shape Point {
+        open x: f64,
+        open y: f64,
+    }
+
+    pure forge length(p: Point) -> f64 {
+        (p.x * p.x + p.y * p.y).sqrt()
+    }
+}
+
+scroll Status {
+    Ok,
+    Error(str),
+    Loading { progress: f32 },
+}
+
+weave Printable {
+    forge format(&self) -> str;
+}
+
+weave Printable for Status {
+    forge format(&self) -> str {
+        branch self {
+            Status::Ok => "All good",
+            Status::Error(msg) => msg,
+            Status::Loading { progress } => `Loading... {progress}%`,
+        }
+    }
+}
+
+forge main() {
+    let p = math::Point { x: 3.0, y: 4.0 };
+    let d = math::length(p);
+    
+    let s = Status::Loading { progress: 50.0 };
+    let msg = s.format();
+    
+    given d > 5.0 {
+        std::io::println("Far away");
+    } else {
+        std::io::println(msg);
+    }
+}

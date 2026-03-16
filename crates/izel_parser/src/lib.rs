@@ -416,13 +416,25 @@ impl Parser {
 
     fn parse_param(&mut self) -> SyntaxNode {
         let mut children = self.eat_trivia();
-        if self.current_kind() == TokenKind::Ident {
-            children.push(SyntaxElement::Token(self.bump())); // name
+        
+        // Handle mutability/references prefix: ~ or & or &~
+        while self.current_kind() == TokenKind::Tilde || self.current_kind() == TokenKind::Ampersand {
+            children.push(SyntaxElement::Token(self.bump()));
+            children.extend(self.eat_trivia().into_iter());
+        }
+
+        if self.current_kind() == TokenKind::Ident || self.current_kind() == TokenKind::SelfKw {
+            children.push(SyntaxElement::Token(self.bump())); // name or self
             children.extend(self.eat_trivia().into_iter());
             if self.current_kind() == TokenKind::Colon {
                 children.push(SyntaxElement::Token(self.bump()));
                 children.extend(self.eat_trivia().into_iter());
                 children.push(SyntaxElement::Node(self.parse_type()));
+            }
+        } else {
+            // Error recovery: consume one token to avoid infinite loop
+            if self.current_kind() != TokenKind::Eof {
+                children.push(SyntaxElement::Token(self.bump()));
             }
         }
         SyntaxNode::new(NodeKind::ParamPart, children)

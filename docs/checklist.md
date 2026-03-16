@@ -99,9 +99,9 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Build dependency graph from `draw` requests.
     - [x] Detect cyclic imports and report as errors.
     - [x] Implement `ward` hierarchy (nested modules).
-- [ ] **Symbol Table**:
+- [x] **Symbol Table**:
     - [x] Map idents to unique `DefId`s (Local variables and globals).
-    - [ ] Handle re-exports and wildcard `*` imports.
+    - [x] Handle re-exports and wildcard `*` imports.
 
 ### 1.3 `izel_ast_lower` (Desugaring)
 - [x] **Sugar Expansion**:

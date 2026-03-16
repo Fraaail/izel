@@ -1,15 +1,28 @@
-shape Person {
-    name: str,
-    age: ?i32,
+draw std::io;
+
+ward math {
+    open shape Point {
+        open x: f64,
+        open y: f64,
+    }
 }
 
-forge get_age(p: Person) -> i32! {
-    let age = p.age!; // Postfix propagation desugaring
-    age
+scroll Status {
+    Ok,
+    Error(str),
+    Loading { progress: f32 },
 }
 
-forge main() -> i32 {
-    let p = Person { name: "Alice", age: 30 };
-    let age_res = get_age(p);
-    0
+weave Printable {
+    forge format(&self) -> str;
+}
+
+weave Printable for Status {
+    forge format(&self) -> str {
+        "status"
+    }
+}
+
+forge main() {
+    let x = 1 + 2;
 }
