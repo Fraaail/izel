@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+izel_span = { path = "../izel_span" }
 izel_session = { path = "../izel_session" }
 izel_lexer = { path = "../izel_lexer" }
 izel_parser = { path = "../izel_parser" }

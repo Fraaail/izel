@@ -145,6 +145,7 @@ dependencies = [
  "izel_lexer",
  "izel_parser",
  "izel_session",
+ "izel_span",
  "tracing",
 ]
 
@@ -154,6 +155,7 @@ version = "0.1.0"
 dependencies = [
  "izel_diagnostics",
  "izel_span",
+ "serde",
  "tracing",
 ]
 

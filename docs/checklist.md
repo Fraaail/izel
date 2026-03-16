@@ -25,16 +25,16 @@ This document provides a granular, step-by-step roadmap for building the Izel co
         - [ ] Implement `ParseOptions` and `Config` (via `clap`).
 
 ### 0.2 `izel_lexer` (DFA Tokenizer)
-- [ ] **Token Definitions**:
-    - [ ] Map all keywords (`forge`, `shape`, `weave`, etc.).
-    - [ ] Define sigils (`~`, `!`, `@`, `|>`, `::`, `->`, `=>`, `..`, `..=`).
-- [ ] **Scanner Logic**:
-    - [ ] Implement `Cursor` for UTF-8 character streaming.
-    - [ ] Handle comments: `//` (single) and `/~ ... ~/` (nested/multi).
+- [x] **Token Definitions**:
+    - [x] Map all keywords (`forge`, `shape`, `weave`, etc.).
+    - [x] Define sigils (`~`, `!`, `@`, `|>`, `::`, `->`, `=>`, `..`, `..=`).
+- [x] **Scanner Logic**:
+    - [x] Implement `Cursor` for UTF-8 character streaming.
+    - [x] Handle comments: `//` (single) and `/~ ... ~/` (nested/multi).
     - [ ] Implement `StringReader`: esc codes, Unicode escapes `\u{...}`.
-    - [ ] Implement `NumberReader`: Support `_` separators, hex/oct/bin prefixes.
-- [ ] **Verification**:
-    - [ ] Implement `izelc --emit tokens` for debugging.
+    - [x] Implement `NumberReader`: Support `_` separators, hex/oct/bin prefixes.
+- [x] **Verification**:
+    - [x] Implement `izelc --emit tokens` for debugging.
     - [ ] Set up `cargo-fuzz` target for the lexer.
 
 ### 0.3 `izel_parser` (CST & AST)

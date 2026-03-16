@@ -10,3 +10,7 @@ repository.workspace = true
 izel_span = { path = "../izel_span" }
 izel_diagnostics = { path = "../izel_diagnostics" }
 tracing = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde", "izel_span/serde"]

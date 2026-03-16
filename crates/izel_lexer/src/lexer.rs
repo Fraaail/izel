@@ -1,0 +1,294 @@
+use crate::cursor::{Cursor, EOF_CHAR};
+use crate::{Base, Token, TokenKind};
+use izel_span::{BytePos, SourceId, Span};
+
+pub struct Lexer<'a> {
+    source: &'a str,
+    cursor: Cursor<'a>,
+    source_id: SourceId,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(source: &'a str, source_id: SourceId) -> Self {
+        Self {
+            source,
+            cursor: Cursor::new(source),
+            source_id,
+        }
+    }
+
+    pub fn next_token(&mut self) -> Token {
+        self.eat_whitespace_and_comments();
+        
+        let start = self.pos();
+        if self.cursor.is_eof() {
+            return Token::new(TokenKind::Eof, self.make_span(start, start));
+        }
+
+        let first = self.cursor.bump().unwrap();
+        let kind = match first {
+            // Sigils & Punctuation
+            '~' => TokenKind::Tilde,
+            '!' => {
+                if self.cursor.first() == '=' {
+                    self.cursor.bump();
+                    TokenKind::NotEq
+                } else {
+                    TokenKind::Bang
+                }
+            }
+            '@' => TokenKind::At,
+            '|' => {
+                if self.cursor.first() == '>' {
+                    self.cursor.bump();
+                    TokenKind::Pipe
+                } else {
+                    TokenKind::Unknown
+                }
+            }
+            ':' => {
+                if self.cursor.first() == ':' {
+                    self.cursor.bump();
+                    TokenKind::DoubleColon
+                } else {
+                    TokenKind::Colon
+                }
+            }
+            '-' => {
+                if self.cursor.first() == '>' {
+                    self.cursor.bump();
+                    TokenKind::Arrow
+                } else {
+                    TokenKind::Minus
+                }
+            }
+            '=' => {
+                if self.cursor.first() == '>' {
+                    self.cursor.bump();
+                    TokenKind::FatArrow
+                } else if self.cursor.first() == '=' {
+                    self.cursor.bump();
+                    TokenKind::EqEq
+                } else {
+                    TokenKind::Equal
+                }
+            }
+            '.' => {
+                if self.cursor.first() == '.' {
+                    self.cursor.bump();
+                    if self.cursor.first() == '=' {
+                        self.cursor.bump();
+                        TokenKind::DotDotEq
+                    } else {
+                        TokenKind::DotDot
+                    }
+                } else {
+                    TokenKind::Dot
+                }
+            }
+            '?' => TokenKind::Question,
+            '#' => TokenKind::Pound,
+            '+' => TokenKind::Plus,
+            '*' => TokenKind::Star,
+            '/' => TokenKind::Slash,
+            '%' => TokenKind::Percent,
+            '^' => TokenKind::Caret,
+            '&' => TokenKind::Ampersand,
+            '<' => {
+                if self.cursor.first() == '=' {
+                    self.cursor.bump();
+                    TokenKind::Le
+                } else {
+                    TokenKind::Lt
+                }
+            }
+            '>' => {
+                if self.cursor.first() == '=' {
+                    self.cursor.bump();
+                    TokenKind::Ge
+                } else {
+                    TokenKind::Gt
+                }
+            }
+            '(' => TokenKind::OpenParen,
+            ')' => TokenKind::CloseParen,
+            '{' => TokenKind::OpenBrace,
+            '}' => TokenKind::CloseBrace,
+            '[' => TokenKind::OpenBracket,
+            ']' => TokenKind::CloseBracket,
+            ',' => TokenKind::Comma,
+            ';' => TokenKind::Semicolon,
+
+            // Identifiers & Keywords
+            c if is_ident_start(c) => self.lex_ident_or_keyword(first),
+
+            // Numeric Literals
+            c if c.is_ascii_digit() => self.lex_number(first),
+
+            // Strings
+            '"' => self.lex_string(),
+
+            _ => TokenKind::Unknown,
+        };
+
+        let end = self.pos();
+        Token::new(kind, self.make_span(start, end))
+    }
+
+    fn lex_ident_or_keyword(&mut self, first: char) -> TokenKind {
+        let start = self.cursor.pos_within(self.source) - first.len_utf8();
+        self.cursor.eat_while(is_ident_continue);
+        let end = self.cursor.pos_within(self.source);
+        let text = &self.source[start..end];
+
+        match text {
+            "forge"    => TokenKind::Forge,
+            "shape"    => TokenKind::Shape,
+            "scroll"   => TokenKind::Scroll,
+            "weave"    => TokenKind::Weave,
+            "ward"     => TokenKind::Ward,
+            "echo"     => TokenKind::Echo,
+            "branch"   => TokenKind::Branch,
+            "given"    => TokenKind::Given,
+            "else"     => TokenKind::Else,
+            "loop"     => TokenKind::Loop,
+            "each"     => TokenKind::Each,
+            "while"    => TokenKind::While,
+            "break"    => TokenKind::Break,
+            "next"     => TokenKind::Next,
+            "give"     => TokenKind::Give,
+            "let"      => TokenKind::Let,
+            "raw"      => TokenKind::Raw,
+            "bridge"   => TokenKind::Bridge,
+            "flow"     => TokenKind::Flow,
+            "tide"     => TokenKind::Tide,
+            "zone"     => TokenKind::Zone,
+            "dual"     => TokenKind::Dual,
+            "seek"     => TokenKind::Seek,
+            "catch"    => TokenKind::Catch,
+            "draw"     => TokenKind::Draw,
+            "open"     => TokenKind::Open,
+            "hidden"   => TokenKind::Hidden,
+            "pkg"      => TokenKind::Pkg,
+            "pure"     => TokenKind::Pure,
+            "sole"     => TokenKind::Sole,
+            "self"     => TokenKind::SelfKw,
+            "Self"     => TokenKind::SelfType,
+            "true"     => TokenKind::True,
+            "false"    => TokenKind::False,
+            "nil"      => TokenKind::Nil,
+            "as"       => TokenKind::As,
+            "in"       => TokenKind::In,
+            "of"       => TokenKind::Of,
+            "is"       => TokenKind::Is,
+            "not"      => TokenKind::Not,
+            "and"      => TokenKind::And,
+            "or"       => TokenKind::Or,
+            "comptime" => TokenKind::Comptime,
+            "static"   => TokenKind::Static,
+            "extern"   => TokenKind::Extern,
+            "type"     => TokenKind::Type,
+            "alias"    => TokenKind::Alias,
+            "impl"     => TokenKind::Impl,
+            _          => TokenKind::Ident,
+        }
+    }
+
+    fn lex_number(&mut self, first: char) -> TokenKind {
+        let mut base = Base::Decimal;
+        if first == '0' {
+            match self.cursor.first() {
+                'x' => { self.cursor.bump(); base = Base::Hexadecimal; }
+                'b' => { self.cursor.bump(); base = Base::Binary; }
+                'o' => { self.cursor.bump(); base = Base::Octal; }
+                _ => {}
+            }
+        }
+
+        self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_' || (base == Base::Hexadecimal && c.is_ascii_hexdigit()));
+        
+        if self.cursor.first() == '.' && self.cursor.second() != '.' {
+            self.cursor.bump();
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+            TokenKind::Float
+        } else {
+            TokenKind::Int { base, empty_int: false }
+        }
+    }
+
+    fn lex_string(&mut self) -> TokenKind {
+        let mut terminated = false;
+        while let Some(c) = self.cursor.bump() {
+            if c == '"' {
+                terminated = true;
+                break;
+            }
+            if c == '\\' {
+                self.cursor.bump();
+            }
+        }
+        TokenKind::Str { terminated }
+    }
+
+    fn eat_whitespace_and_comments(&mut self) {
+        loop {
+            match self.cursor.first() {
+                c if c.is_whitespace() => {
+                    self.cursor.bump();
+                }
+                '/' => {
+                    match self.cursor.second() {
+                        '/' => {
+                            self.cursor.bump();
+                            self.cursor.bump();
+                            self.cursor.eat_while(|c| c != '\n' && c != EOF_CHAR);
+                        }
+                        '~' => {
+                            self.cursor.bump();
+                            self.cursor.bump();
+                            self.eat_multi_line_comment();
+                        }
+                        _ => break,
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    fn eat_multi_line_comment(&mut self) {
+        let mut depth = 1;
+        while let Some(c) = self.cursor.bump() {
+            match c {
+                '/' if self.cursor.first() == '~' => {
+                    self.cursor.bump();
+                    depth += 1;
+                }
+                '~' if self.cursor.first() == '/' => {
+                    self.cursor.bump();
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn pos(&self) -> BytePos {
+        BytePos(self.cursor.pos_within(self.source) as u32)
+    }
+
+    fn make_span(&self, start: BytePos, end: BytePos) -> Span {
+        Span::new(start, end, self.source_id)
+    }
+}
+
+fn is_ident_start(c: char) -> bool {
+    c.is_alphabetic() || c == '_'
+}
+
+fn is_ident_continue(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
