@@ -120,13 +120,13 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Define comprehensive `Type` enum and `TypeChecker` structure.
     - [x] Implement basic unification (Algorithm W style).
     - [x] Implement Hindley-Milner with constraint gathering.
-    - [ ] Implement Row-based unification for effects.
+    - [x] Implement Row-based unification for effects.
 - [ ] **Traits & Poly**:
     - [ ] Resolve `weave` bounds on generics.
     - [ ] Handle associated types (`type Item`).
     - [ ] Implement orphan rule check (coherence).
 - [ ] **Effect System**:
-    - [ ] Transitive effect discovery (e.g., `f` calls `g !io` -> `f` is `!io`).
+    - [x] Transitive effect discovery (e.g., `f` calls `g !io` -> `f` is `!io`).
     - [x] Check `forge f() !effect` annotations at call sites.
 
 ### 2.2 `izel_borrow` (Ownership System)

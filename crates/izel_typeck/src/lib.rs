@@ -10,12 +10,15 @@ pub struct TypeChecker {
     /// Type of each expression span/id (once we have Expr IDs)
     pub expr_types: FxHashMap<usize, Type>,
     pub substitutions: FxHashMap<usize, Type>,
+    pub effect_substitutions: FxHashMap<usize, EffectSet>,
     pub env: Vec<FxHashMap<String, Scheme>>,
     pub expected_ret: Option<Type>,
     pub current_level: usize,
     pub var_levels: FxHashMap<usize, usize>,
+    pub effect_var_levels: FxHashMap<usize, usize>,
     pub current_effects: Vec<EffectSet>,
     next_var: usize,
+    next_effect_var: usize,
 }
 
 impl TypeChecker {
@@ -24,12 +27,15 @@ impl TypeChecker {
             def_types: FxHashMap::default(),
             expr_types: FxHashMap::default(),
             substitutions: FxHashMap::default(),
+            effect_substitutions: FxHashMap::default(),
             env: vec![FxHashMap::default()], // Global scope
             expected_ret: None,
             current_level: 0,
             var_levels: FxHashMap::default(),
+            effect_var_levels: FxHashMap::default(),
             current_effects: Vec::new(),
             next_var: 0,
+            next_effect_var: 0,
         }
     }
 
@@ -51,7 +57,7 @@ impl TypeChecker {
 
     pub fn define(&mut self, name: String, ty: Type) {
         if let Some(scope) = self.env.last_mut() {
-            scope.insert(name, Scheme { vars: vec![], names: vec![], ty });
+            scope.insert(name, Scheme { vars: vec![], effect_vars: vec![], names: vec![], ty });
         }
     }
 
@@ -83,6 +89,13 @@ impl TypeChecker {
         var
     }
 
+    pub fn new_effect_var(&mut self) -> EffectSet {
+        let id = self.next_effect_var;
+        self.effect_var_levels.insert(id, self.current_level);
+        self.next_effect_var += 1;
+        EffectSet::Var(id)
+    }
+
     pub fn check_ast(&mut self, module: &ast::Module) {
         // Pass 1: Collect top-level item signatures
         for item in &module.items {
@@ -101,25 +114,25 @@ impl TypeChecker {
                           let pty = self.lower_ast_type(&param.ty);
                           self.define(param.name.clone(), pty);
                      }
-                      if let Some(body) = &f.body {
-                           self.current_effects.push(EffectSet::Concrete(vec![]));
-                           self.check_block_with_expected(body, Some(&ret_ty));
-                           let collected = self.current_effects.pop().unwrap();
-                           
-                           // Check against declared effects
-                           if let Some(sig) = self.resolve_name(&f.name) {
-                               if let Type::Function { effects: declared, .. } = self.prune(&sig) {
-                                   if let (EffectSet::Concrete(c), EffectSet::Concrete(d)) = (collected, declared) {
-                                       for effect in c {
-                                           if !d.contains(&effect) && !d.contains(&Effect::Pure) {
-                                                // TODO: Propagate Error or Warning
-                                                println!("Effect Warning: Function {} performs {:?}, but only has {:?}", f.name, effect, d);
-                                           }
-                                       }
-                                   }
-                               }
-                           }
-                      }
+                     
+                     if let Some(body) = &f.body {
+                         let body_effects = self.new_effect_var();
+                         self.current_effects.push(body_effects.clone());
+                         self.check_block_with_expected(body, Some(&ret_ty));
+                         let collected = self.current_effects.pop().unwrap();
+                         
+                         // Unify body effects with declared/inferred effects
+                         if let Some(sig) = self.resolve_name(&f.name) {
+                             if let Type::Function { effects: declared, .. } = self.prune(&sig) {
+                                 if !self.unify_effects(&collected, &declared) {
+                                     // TODO: Proper diagnostic
+                                     println!("Effect Error: Function {} body effects ({:?}) do not match declared/inferred effects ({:?})", 
+                                         f.name, self.prune_effects(&collected), self.prune_effects(&declared));
+                                 }
+                             }
+                         }
+                     }
+                     
                      self.expected_ret = old_ret;
                      self.pop_scope();
                 }
@@ -154,10 +167,18 @@ impl TypeChecker {
                     });
                 }
                 
+                let effect_set = if f.effects.is_empty() {
+                    self.new_effect_var()
+                } else if f.effects.contains(&"pure".to_string()) {
+                    EffectSet::Concrete(vec![Effect::Pure])
+                } else {
+                    EffectSet::Concrete(effects)
+                };
+
                 let ty = Type::Function { 
                     params, 
                     ret, 
-                    effects: EffectSet::Concrete(effects) 
+                    effects: effect_set.clone()
                 };
                 
                 self.pop_scope();
@@ -307,9 +328,7 @@ impl TypeChecker {
                     if !self.unify(p1, p2) { return false; }
                 }
                 if !self.unify(r1, r2) { return false; }
-                // Effects must also unify
-                // For now, simple check
-                e1 == e2 
+                self.unify_effects(e1, e2)
             }
             (Type::Adt(id1), Type::Adt(id2)) => id1 == id2,
 
@@ -325,17 +344,69 @@ impl TypeChecker {
         }
     }
 
-    fn unify_effects_static(e1: &mut EffectSet, e2: &EffectSet) -> bool {
-        match (e1, e2) {
-             (EffectSet::Concrete(v1), EffectSet::Concrete(v2)) => {
-                 for e in v2 {
-                     if !v1.contains(e) { 
-                         v1.push(e.clone()); 
-                     }
-                 }
-                 true
-             }
-             _ => true, 
+    pub fn unify_effects(&mut self, e1: &EffectSet, e2: &EffectSet) -> bool {
+        let e1 = self.prune_effects(e1);
+        let e2 = self.prune_effects(e2);
+        
+        match (&e1, &e2) {
+            (EffectSet::Var(id1), EffectSet::Var(id2)) if id1 == id2 => true,
+            (EffectSet::Var(id), other) => self.bind_effect_var(*id, other.clone()),
+            (other, EffectSet::Var(id)) => self.bind_effect_var(*id, other.clone()),
+            (EffectSet::Concrete(v1), EffectSet::Concrete(v2)) => {
+                if v1.len() != v2.len() { return false; }
+                for e in v1 {
+                    if !v2.contains(e) { return false; }
+                }
+                true
+            }
+            (EffectSet::Row(vals1, tail1), EffectSet::Row(vals2, tail2)) => {
+                if vals1 == vals2 {
+                    return self.unify_effects(tail1, tail2);
+                }
+                false
+            }
+            (EffectSet::Concrete(v), EffectSet::Row(vals, tail)) | (EffectSet::Row(vals, tail), EffectSet::Concrete(v)) => {
+                for e in vals {
+                    if !v.contains(e) { return false; }
+                }
+                let remaining: Vec<_> = v.iter().filter(|e| !vals.contains(e)).cloned().collect();
+                self.unify_effects(tail, &EffectSet::Concrete(remaining))
+            }
+        }
+    }
+
+    fn bind_effect_var(&mut self, id: usize, effects: EffectSet) -> bool {
+        if let EffectSet::Var(other_id) = effects {
+            if id == other_id { return true; }
+        }
+        if self.occurs_check_effects(id, &effects) {
+            return false;
+        }
+        let var_level = self.effect_var_levels.get(&id).cloned().unwrap_or(0);
+        self.adjust_effect_levels(var_level, &effects);
+        
+        self.effect_substitutions.insert(id, effects);
+        true
+    }
+
+    fn occurs_check_effects(&self, id: usize, effects: &EffectSet) -> bool {
+        match self.prune_effects(effects) {
+            EffectSet::Var(other_id) => id == other_id,
+            EffectSet::Row(_, tail) => self.occurs_check_effects(id, &tail),
+            _ => false,
+        }
+    }
+
+    fn adjust_effect_levels(&mut self, level: usize, effects: &EffectSet) {
+        match self.prune_effects(effects) {
+            EffectSet::Var(id) => {
+                let l = self.effect_var_levels.get(&id).cloned().unwrap_or(0);
+                if l > level {
+                    self.effect_var_levels.insert(id, level);
+                }
+            }
+            EffectSet::Row(_, tail) => self.adjust_effect_levels(level, &tail),
+            _ => {}
         }
     }
 
@@ -346,6 +417,15 @@ impl TypeChecker {
             }
         }
         ty.clone()
+    }
+
+    fn prune_effects(&self, effects: &EffectSet) -> EffectSet {
+        if let EffectSet::Var(id) = effects {
+            if let Some(bound) = self.effect_substitutions.get(id) {
+                return self.prune_effects(bound);
+            }
+        }
+        effects.clone()
     }
 
     fn bind_var(&mut self, id: usize, ty: Type) {
@@ -435,8 +515,9 @@ impl TypeChecker {
             ast::Expr::Call(callee, args) => {
                 let ct = self.infer_expr(callee);
                 if let Type::Function { params, ret, effects } = self.prune(&ct) {
-                     if let Some(current) = self.current_effects.last_mut() {
-                         Self::unify_effects_static(current, &effects);
+                     let current = self.current_effects.last().cloned();
+                     if let Some(curr) = current {
+                         self.unify_effects(&curr, &effects);
                      }
                      for (arg, pty) in args.iter().zip(params.iter()) {
                           let at = self.infer_expr(arg);
@@ -558,11 +639,13 @@ impl TypeChecker {
 
     fn generalize(&self, ty: &Type) -> Scheme {
         let mut vars = Vec::new();
+        let mut effect_vars = Vec::new();
         let mut names = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        let mut seen_effects = std::collections::HashSet::new();
         let mut seen_names = std::collections::HashSet::new();
-        self.find_gen_vars(ty, &mut vars, &mut seen, &mut names, &mut seen_names);
-        Scheme { vars, names, ty: ty.clone() }
+        self.find_gen_vars(ty, &mut vars, &mut seen, &mut effect_vars, &mut seen_effects, &mut names, &mut seen_names);
+        Scheme { vars, effect_vars, names, ty: ty.clone() }
     }
 
     fn find_gen_vars(
@@ -570,6 +653,8 @@ impl TypeChecker {
         ty: &Type, 
         vars: &mut Vec<usize>, 
         seen: &mut std::collections::HashSet<usize>,
+        effect_vars: &mut Vec<usize>,
+        seen_effects: &mut std::collections::HashSet<usize>,
         names: &mut Vec<String>,
         seen_names: &mut std::collections::HashSet<String>,
     ) {
@@ -588,19 +673,43 @@ impl TypeChecker {
                     names.push(name.clone());
                 }
             }
-            Type::Function { params, ret, effects: _ } => {
+            Type::Function { params, ret, effects } => {
                 for p in params {
-                    self.find_gen_vars(&p, vars, seen, names, seen_names);
+                    self.find_gen_vars(&p, vars, seen, effect_vars, seen_effects, names, seen_names);
                 }
-                self.find_gen_vars(&ret, vars, seen, names, seen_names);
+                self.find_gen_vars(&ret, vars, seen, effect_vars, seen_effects, names, seen_names);
+                self.find_gen_effect_vars(&effects, effect_vars, seen_effects);
             }
             Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _) => {
-                self.find_gen_vars(&inner, vars, seen, names, seen_names);
+                self.find_gen_vars(&inner, vars, seen, effect_vars, seen_effects, names, seen_names);
             }
             Type::Static(fields) => {
                 for (_, t) in fields {
-                    self.find_gen_vars(&t, vars, seen, names, seen_names);
+                    self.find_gen_vars(&t, vars, seen, effect_vars, seen_effects, names, seen_names);
                 }
+            }
+            _ => {}
+        }
+    }
+
+    fn find_gen_effect_vars(
+        &self,
+        effects: &EffectSet,
+        effect_vars: &mut Vec<usize>,
+        seen_effects: &mut std::collections::HashSet<usize>,
+    ) {
+        let effects = self.prune_effects(effects);
+        match effects {
+            EffectSet::Var(id) => {
+                if seen_effects.insert(id) {
+                    let level = self.effect_var_levels.get(&id).cloned().unwrap_or(0);
+                    if level > self.current_level {
+                        effect_vars.push(id);
+                    }
+                }
+            }
+            EffectSet::Row(_, tail) => {
+                self.find_gen_effect_vars(&tail, effect_vars, seen_effects);
             }
             _ => {}
         }
@@ -608,20 +717,25 @@ impl TypeChecker {
 
     fn instantiate(&mut self, scheme: &Scheme) -> Type {
         let mut mapping = FxHashMap::default();
+        let mut effect_mapping = FxHashMap::default();
         let mut name_mapping = FxHashMap::default();
         for &v in &scheme.vars {
             mapping.insert(v, self.new_var());
         }
+        for &v in &scheme.effect_vars {
+            effect_mapping.insert(v, self.new_effect_var());
+        }
         for name in &scheme.names {
             name_mapping.insert(name.clone(), self.new_var());
         }
-        self.substitute_scheme(&scheme.ty, &mapping, &name_mapping)
+        self.substitute_scheme(&scheme.ty, &mapping, &effect_mapping, &name_mapping)
     }
 
     fn substitute_scheme(
         &self, 
         ty: &Type, 
         mapping: &FxHashMap<usize, Type>,
+        effect_mapping: &FxHashMap<usize, EffectSet>,
         name_mapping: &FxHashMap<String, Type>
     ) -> Type {
         match ty {
@@ -640,17 +754,74 @@ impl TypeChecker {
                 }
             }
             Type::Function { params, ret, effects } => Type::Function {
-                params: params.iter().map(|p| self.substitute_scheme(p, mapping, name_mapping)).collect(),
-                ret: Box::new(self.substitute_scheme(ret, mapping, name_mapping)),
-                effects: effects.clone(), // For now
+                params: params.iter().map(|p| self.substitute_scheme(p, mapping, effect_mapping, name_mapping)).collect(),
+                ret: Box::new(self.substitute_scheme(ret, mapping, effect_mapping, name_mapping)),
+                effects: self.substitute_effects(effects, effect_mapping),
             },
-            Type::Optional(inner) => Type::Optional(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),
-            Type::Cascade(inner) => Type::Cascade(Box::new(self.substitute_scheme(inner, mapping, name_mapping))),
-            Type::Pointer(inner, m) => Type::Pointer(Box::new(self.substitute_scheme(inner, mapping, name_mapping)), *m),
+            Type::Optional(inner) => Type::Optional(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping))),
+            Type::Cascade(inner) => Type::Cascade(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping))),
+            Type::Pointer(inner, m) => Type::Pointer(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping)), *m),
             Type::Static(fields) => Type::Static(
-                fields.iter().map(|(n, t)| (n.clone(), self.substitute_scheme(t, mapping, name_mapping))).collect()
+                fields.iter().map(|(n, t)| (n.clone(), self.substitute_scheme(t, mapping, effect_mapping, name_mapping))).collect()
             ),
             _ => ty.clone(),
         }
+    }
+
+    fn substitute_effects(&self, effects: &EffectSet, mapping: &FxHashMap<usize, EffectSet>) -> EffectSet {
+        let effects = self.prune_effects(effects);
+        match effects {
+            EffectSet::Var(id) => {
+                if let Some(new) = mapping.get(&id) {
+                    new.clone()
+                } else {
+                    effects
+                }
+            }
+            EffectSet::Row(vals, tail) => {
+                EffectSet::Row(vals, Box::new(self.substitute_effects(&tail, mapping)))
+            }
+            _ => effects,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::type_system::Effect;
+
+    #[test]
+    fn test_unify_concrete_effects() {
+        let mut tc = TypeChecker::new();
+        let e1 = EffectSet::Concrete(vec![Effect::IO]);
+        let e2 = EffectSet::Concrete(vec![Effect::IO]);
+        assert!(tc.unify_effects(&e1, &e2));
+        
+        let e3 = EffectSet::Concrete(vec![Effect::Alloc]);
+        assert!(!tc.unify_effects(&e1, &e3));
+    }
+
+    #[test]
+    fn test_unify_effect_vars() {
+        let mut tc = TypeChecker::new();
+        let ev1 = tc.new_effect_var();
+        let e1 = EffectSet::Concrete(vec![Effect::Mut]);
+        
+        assert!(tc.unify_effects(&ev1, &e1));
+        let pruned = tc.prune_effects(&ev1);
+        assert_eq!(pruned, e1);
+    }
+
+    #[test]
+    fn test_unify_rows() {
+        let mut tc = TypeChecker::new();
+        let tail = tc.new_effect_var();
+        let row = EffectSet::Row(vec![Effect::IO], Box::new(tail.clone()));
+        let concrete = EffectSet::Concrete(vec![Effect::IO, Effect::Alloc]);
+        
+        assert!(tc.unify_effects(&row, &concrete));
+        let pruned_tail = tc.prune_effects(&tail);
+        assert_eq!(pruned_tail, EffectSet::Concrete(vec![Effect::Alloc]));
     }
 }

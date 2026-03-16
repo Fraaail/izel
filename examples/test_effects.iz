@@ -1,0 +1,23 @@
+forge print_io() !io {
+    // Built-in or external IO
+}
+
+forge call_io() {
+    print_io(); // Should infer !io for call_io
+}
+
+forge pure_function() !pure {
+    // No effects
+}
+
+forge call_pure() {
+    pure_function(); // Should remain pure
+}
+
+forge main() {
+    call_io(); // Should infer !io for main
+}
+
+forge failing_pure() !pure {
+    print_io(); // Should FAIL
+}

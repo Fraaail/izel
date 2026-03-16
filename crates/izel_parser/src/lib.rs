@@ -616,7 +616,7 @@ impl Parser {
         let mut results = vec![];
         while self.current_kind() == TokenKind::Bang {
              let mut inner = vec![SyntaxElement::Token(self.bump())];
-             if self.current_kind() == TokenKind::Ident {
+             if self.current_kind() == TokenKind::Ident || self.current_kind() == TokenKind::Pure {
                  inner.push(SyntaxElement::Token(self.bump()));
              }
              results.push(SyntaxElement::Node(SyntaxNode::new(NodeKind::Effect, inner)));

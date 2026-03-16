@@ -662,7 +662,7 @@ impl<'a> Lowerer<'a> {
     fn lower_effect(&self, node: &SyntaxNode) -> String {
         for child in &node.children {
             if let SyntaxElement::Token(t) = child {
-                if t.kind == TokenKind::Ident {
+                if matches!(t.kind, TokenKind::Ident | TokenKind::Pure) {
                     return self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
                 }
             }

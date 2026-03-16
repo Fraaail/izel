@@ -71,6 +71,8 @@ pub enum Effect {
 pub struct Scheme {
     /// Anonymous inference variables to generalize
     pub vars: Vec<usize>,
+    /// Anonymous effect variables to generalize
+    pub effect_vars: Vec<usize>,
     /// Named generic parameters (<T>)
     pub names: Vec<String>,
     pub ty: Type,
