@@ -17,8 +17,9 @@ pub enum Precedence {
     Sum,        // + -
     Product,    // * / %
     Unary,      // - not ~ * & &~
-    Cast,       // as !
-    Call,       // . () [] ::
+    Cast,       // as
+    Type,       // !
+    Call,       // . () [] :: ? {
 }
 
 impl Precedence {
@@ -33,8 +34,8 @@ impl Precedence {
             TokenKind::Ampersand => Precedence::BitAnd,
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
-            TokenKind::As | TokenKind::Bang => Precedence::Cast,
-            TokenKind::Dot | TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::DoubleColon | TokenKind::OpenBrace => Precedence::Call,
+            TokenKind::As => Precedence::Cast,
+            TokenKind::Bang | TokenKind::Dot | TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::DoubleColon | TokenKind::OpenBrace | TokenKind::Question => Precedence::Call,
             _ => Precedence::None,
         }
     }
@@ -45,18 +46,39 @@ impl Parser {
         let mut lhs = self.parse_primary();
         
         loop {
-            let kind = self.current_kind();
+            // Skip trivia but we don't necessarily have a place to put it here 
+            // without changing the structure significantly.
+            // Let's just peer at the next non-trivia token.
+            let mut offset = 0;
+            while let Some(t) = self.tokens.get(self.pos + offset) {
+                if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Comment {
+                    offset += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let kind = self.tokens.get(self.pos + offset).map(|t| t.kind).unwrap_or(TokenKind::Eof);
             let prec = Precedence::from_kind(kind);
             if prec <= min_precedence || prec == Precedence::None {
                 break;
             }
+
+            // Consume the trivia we skipped
+            for _ in 0..offset { self.bump(); }
             
             if kind == TokenKind::OpenParen {
-                lhs = self.parse_call(lhs);
+                 lhs = self.parse_call(lhs);
             } else if kind == TokenKind::DoubleColon {
                  lhs = self.parse_path_or_turbofish(lhs);
             } else if kind == TokenKind::OpenBrace {
                  lhs = self.parse_struct_literal_expr(lhs);
+            } else if kind == TokenKind::Question {
+                 lhs = self.parse_optional_chaining(lhs);
+            } else if kind == TokenKind::Dot {
+                 lhs = self.parse_member_access(lhs);
+            } else if kind == TokenKind::Bang {
+                 lhs = self.parse_postfix_bang(lhs);
             } else {
                 lhs = self.parse_binary(lhs, prec);
             }
@@ -69,7 +91,7 @@ impl Parser {
         let mut children = self.eat_trivia();
         let kind = self.current_kind();
         match kind {
-            TokenKind::Int { .. } | TokenKind::Float | TokenKind::Str { .. } | TokenKind::True | TokenKind::False | TokenKind::Nil => {
+            TokenKind::Int { .. } | TokenKind::Float | TokenKind::Str { .. } | TokenKind::InterpolatedStr { .. } | TokenKind::True | TokenKind::False | TokenKind::Nil => {
                 children.push(SyntaxElement::Token(self.bump()));
                 SyntaxNode::new(NodeKind::Literal, children)
             }
@@ -190,5 +212,38 @@ impl Parser {
             }
         }
         SyntaxNode::new(NodeKind::StructLiteral, children)
+    }
+
+    fn parse_member_access(&mut self, lhs: SyntaxNode) -> SyntaxNode {
+        let mut children = vec![SyntaxElement::Node(lhs)];
+        children.extend(self.eat_trivia().into_iter());
+        children.push(SyntaxElement::Token(self.bump())); // .
+        children.extend(self.eat_trivia().into_iter());
+        if self.current_kind() == TokenKind::Ident {
+            children.push(SyntaxElement::Token(self.bump()));
+        }
+        SyntaxNode::new(NodeKind::MemberExpr, children)
+    }
+
+    pub(crate) fn parse_postfix_bang(&mut self, lhs: SyntaxNode) -> SyntaxNode {
+        let mut children = vec![SyntaxElement::Node(lhs)];
+        children.extend(self.eat_trivia().into_iter());
+        children.push(SyntaxElement::Token(self.bump())); // !
+        SyntaxNode::new(NodeKind::UnaryExpr, children)
+    }
+
+    fn parse_optional_chaining(&mut self, lhs: SyntaxNode) -> SyntaxNode {
+        let mut children = vec![SyntaxElement::Node(lhs)];
+        children.extend(self.eat_trivia().into_iter());
+        children.push(SyntaxElement::Token(self.bump())); // ?
+        children.extend(self.eat_trivia().into_iter());
+        if self.current_kind() == TokenKind::Dot {
+             children.push(SyntaxElement::Token(self.bump())); // .
+             children.extend(self.eat_trivia().into_iter());
+             if self.current_kind() == TokenKind::Ident {
+                  children.push(SyntaxElement::Token(self.bump()));
+             }
+        }
+        SyntaxNode::new(NodeKind::MemberExpr, children)
     }
 }

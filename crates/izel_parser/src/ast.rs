@@ -1,15 +1,136 @@
 use izel_span::Span;
 
 #[derive(Debug, Clone)]
+pub struct Module {
+    pub items: Vec<Item>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Item {
+    Forge(Forge),
+    Shape(Shape),
+    Scroll(Scroll),
+    Weave(Weave),
+    Impl(Impl),
+    Ward(Ward),
+    Draw(Draw),
+}
+
+#[derive(Debug, Clone)]
+pub struct Forge {
+    pub name: String,
+    pub generic_params: Vec<String>,
+    pub params: Vec<Param>,
+    pub ret_type: Type,
+    pub body: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Shape {
+    pub name: String,
+    pub generic_params: Vec<String>,
+    pub fields: Vec<Field>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub name: String,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Scroll {
+    pub name: String,
+    pub variants: Vec<Variant>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Option<Vec<Field>>, // for data-carrying variants
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Weave {
+    pub name: String,
+    pub methods: Vec<Forge>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Impl {
+    pub target: Type,
+    pub weave: Option<Type>,
+    pub items: Vec<Item>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Ward {
+    pub name: String,
+    pub items: Vec<Item>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Draw {
+    pub path: Vec<String>,
+    pub is_wildcard: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
     Literal(Literal),
     Ident(String, Span),
     Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    Unary(UnaryOp, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
-    // Desugared forms
-    Given(Box<Expr>, Box<Block>, Option<Box<Expr>>),
-    Branch(Box<Expr>, Vec<Arm>),
-    // ...
+    Member(Box<Expr>, String, Span),
+    Path(Vec<String>, Vec<Type>), // For turbofish/qualified paths
+    Block(Block),
+    Given {
+        cond: Box<Expr>,
+        then_block: Block,
+        else_expr: Option<Box<Expr>>,
+    },
+    Branch {
+        target: Box<Expr>,
+        arms: Vec<Arm>,
+    },
+    Loop(Block),
+    While {
+        cond: Box<Expr>,
+        body: Block,
+    },
+    Each {
+        var: String,
+        iter: Box<Expr>,
+        body: Block,
+    },
+    Bind {
+        params: Vec<String>,
+        body: Box<Expr>,
+    },
+    StructLiteral {
+        path: Type,
+        fields: Vec<(String, Expr)>,
+    },
+    Return(Box<Expr>),
+    Next,
+    Break,
 }
 
 #[derive(Debug, Clone)]
@@ -23,32 +144,67 @@ pub enum Literal {
 
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div,
+    Add, Sub, Mul, Div, Rem,
     Eq, Ne, Lt, Gt, Le, Ge,
-    // ...
+    And, Or,
+    BitAnd, BitOr, BitXor,
+    Shl, Shr,
+    Pipeline,
+}
+
+#[derive(Debug, Clone)]
+pub enum UnaryOp {
+    Neg, Not, BitNot, Deref, Ref(bool), // bool is mut
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
+    pub expr: Option<Box<Expr>>, // Trailing expression
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Expr(Expr),
-    Let(String, Option<Type>, Option<Expr>, Span),
+    Let {
+        name: String,
+        ty: Option<Type>,
+        init: Option<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    Path(String),
+    Prim(String),
+    Path(Vec<String>, Vec<Type>),
     Optional(Box<Type>),
-    Pointer(Box<Type>, bool), // bool is mut (tilde)
+    Cascade(Box<Type>),
+    Pointer(Box<Type>, bool), // bool is mut
+    Function {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
+    SelfType,
+    Error,
 }
 
 #[derive(Debug, Clone)]
 pub struct Arm {
-    pub pattern: Expr, // simplistic
+    pub pattern: Pattern,
     pub body: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    Ident(String),
+    Variant(String, Vec<Pattern>),
+    Literal(Literal),
+    Struct {
+        path: Type,
+        fields: Vec<(String, Pattern)>,
+    },
+    Wildcard,
 }

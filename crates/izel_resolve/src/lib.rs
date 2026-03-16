@@ -76,7 +76,11 @@ impl Resolver {
         for child in &node.children {
             if let SyntaxElement::Node(child_node) = child {
                 match child_node.kind {
-                    NodeKind::ForgeDecl => self.resolve_named_decl(child_node, TokenKind::Forge, source),
+                    NodeKind::ForgeDecl => {
+                         self.resolve_named_decl(child_node, TokenKind::Forge, source);
+                         // Also resolve inside forge
+                         self.resolve_block_in_node(child_node, source);
+                    }
                     NodeKind::ShapeDecl => self.resolve_named_decl(child_node, TokenKind::Shape, source),
                     NodeKind::ScrollDecl => self.resolve_named_decl(child_node, TokenKind::Scroll, source),
                     NodeKind::WardDecl => self.resolve_ward_decl(child_node, source),
@@ -84,8 +88,62 @@ impl Resolver {
                     NodeKind::ImplBlock => self.resolve_children(child_node, source),
                     NodeKind::WeaveDecl => self.resolve_named_decl(child_node, TokenKind::Weave, source),
                     NodeKind::DrawDecl => self.resolve_draw_decl(child_node, source),
-                    _ => {}
+                    NodeKind::Block => self.resolve_block(child_node, source),
+                    NodeKind::LetStmt => self.resolve_let_stmt(child_node, source),
+                    NodeKind::Ident => {
+                         // Resolve use of identifier
+                         let span = child_node.span();
+                         let name = source[span.lo.0 as usize..span.hi.0 as usize].to_string();
+                         if let Some(sym) = self.current_scope.resolve(&name) {
+                              // Link this use to sym.def_id
+                              // For now we just print/log
+                              println!("Resolved use: {} to DefId({:?})", name, sym.def_id);
+                         }
+                    }
+                    _ => self.resolve_children(child_node, source),
                 }
+            }
+        }
+    }
+
+    fn resolve_block_in_node(&mut self, node: &SyntaxNode, source: &str) {
+        for child in &node.children {
+            if let SyntaxElement::Node(child_node) = child {
+                if child_node.kind == NodeKind::Block {
+                    self.resolve_block(child_node, source);
+                }
+            }
+        }
+    }
+
+    fn resolve_block(&mut self, node: &SyntaxNode, source: &str) {
+        let parent = self.current_scope.clone();
+        self.current_scope = Arc::new(Scope::new(Some(parent)));
+        
+        self.resolve_children(node, source);
+        
+        let p = self.current_scope.parent.clone().expect("Block scope must have parent");
+        self.current_scope = p;
+    }
+
+    fn resolve_let_stmt(&mut self, node: &SyntaxNode, source: &str) {
+        let mut found_let = false;
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(t) if t.kind == TokenKind::Let || t.kind == TokenKind::Tilde => {
+                    found_let = true;
+                }
+                SyntaxElement::Token(t) if found_let && t.kind == TokenKind::Ident => {
+                    let name = source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                    let id = self.next_id();
+                    self.current_scope.define(name, t.span, id);
+                    break;
+                }
+                SyntaxElement::Node(n) => {
+                     // Resolve RHS before defining the name (if we want to prevent recursive use)
+                     self.resolve_children(n, source);
+                }
+                _ => {}
             }
         }
     }

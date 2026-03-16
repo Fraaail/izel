@@ -64,6 +64,7 @@ pub enum TokenKind {
     Int { base: Base, empty_int: bool },
     Float,
     Str { terminated: bool },
+    InterpolatedStr { terminated: bool },
     ByteStr { terminated: bool },
     Char { terminated: bool },
     Byte { terminated: bool },

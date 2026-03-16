@@ -3,7 +3,13 @@ shape Person {
     age: ?i32,
 }
 
+forge get_age(p: Person) -> i32! {
+    let age = p.age!; // Postfix propagation desugaring
+    age
+}
+
 forge main() -> i32 {
-    let p = Person { name: "Alice", age: nil };
+    let p = Person { name: "Alice", age: 30 };
+    let age_res = get_age(p);
     0
 }

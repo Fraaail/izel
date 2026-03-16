@@ -29,19 +29,17 @@ fn main() -> Result<()> {
     let mut parser = izel_parser::Parser::new(tokens);
     let cst = parser.parse_source_file();
     
-    println!("Lowering to MIR...");
-    let mut _lowerer = izel_mir::lower::MirLowerer::new(&source);
-    
     println!("Resolving symbols...");
     let mut resolver = izel_resolve::Resolver::new();
     resolver.resolve_source_file(&cst, &source);
-    for (name, symbol) in &*resolver.root_scope.symbols.borrow() {
-        println!("Resolved symbol: {} at {:?}", name, symbol.span);
-    }
+    
+    println!("Desugaring AST...");
+    let ast_lowerer = izel_ast_lower::Lowerer::new(&source);
+    let _ast = ast_lowerer.lower_module(&cst);
 
     println!("Type checking...");
-    let mut _typeck = izel_typeck::TypeChecker::new();
-    _typeck.check_source_file();
+    let mut typeck = izel_typeck::TypeChecker::new();
+    typeck.check_ast(&_ast);
 
     println!("Generating LLVM IR...");
     let context = inkwell::context::Context::create();

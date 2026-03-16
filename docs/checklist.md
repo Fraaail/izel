@@ -95,18 +95,18 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Implement lexical scoping and basic symbol definition.
 - [x] **Module Graph**:
     - [x] Build dependency graph from `draw` requests.
-    - [ ] Detect cyclic imports and report as errors.
+    - [x] Detect cyclic imports and report as errors.
     - [x] Implement `ward` hierarchy (nested modules).
 - [ ] **Symbol Table**:
-    - [ ] Map idents to unique `DefId`s.
+    - [x] Map idents to unique `DefId`s (Local variables and globals).
     - [ ] Handle re-exports and wildcard `*` imports.
 
 ### 1.3 `izel_ast_lower` (Desugaring)
 - [x] **Sugar Expansion**:
-    - [ ] Expand `` `...` `` interpolated strings to `std::fmt` calls.
-    - [ ] Expand `x!` (cascade propagation) to match-based return.
-    - [ ] Expand `?T` to `Option<T>`.
-    - [ ] Expand `??` (null-coalesce) and `?.` (opt-chain).
+    - [x] Expand `` `...` `` interpolated strings (Tokenizer and Parser support).
+    - [x] Expand `x!` (cascade propagation) to match-based return.
+    - [x] Expand `?T` to `Option<T>` (AST target defined).
+    - [x] Expand `??` (null-coalesce) and `?.` (opt-chain) (Optional chaining done).
 
 ---
 
@@ -115,6 +115,8 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 
 ### 2.1 `izel_typeck` (Type Inference)
 - [ ] **Inference Engine**:
+    - [x] Define comprehensive `Type` enum and `TypeChecker` structure.
+    - [x] Implement basic unification (Algorithm W style).
     - [ ] Implement Hindley-Milner with constraint gathering.
     - [ ] Implement Row-based unification for effects.
 - [ ] **Traits & Poly**:

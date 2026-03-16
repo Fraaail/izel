@@ -11,6 +11,7 @@ izel_span = { path = "../izel_span" }
 izel_session = { path = "../izel_session" }
 izel_lexer = { path = "../izel_lexer" }
 izel_parser = { path = "../izel_parser" }
+izel_ast_lower = { path = "../izel_ast_lower" }
 izel_codegen = { path = "../izel_codegen" }
 izel_mir = { path = "../izel_mir" }
 izel_resolve = { path = "../izel_resolve" }

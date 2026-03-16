@@ -28,4 +28,12 @@ impl Span {
         assert_eq!(self.source_id, other.source_id);
         Span::new(self.lo, other.hi, self.source_id)
     }
+
+    pub fn dummy() -> Self {
+        Self {
+            lo: BytePos(0),
+            hi: BytePos(0),
+            source_id: SourceId(0),
+        }
+    }
 }

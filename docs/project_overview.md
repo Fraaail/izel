@@ -2241,7 +2241,7 @@ export LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)
 apt-get install llvm-17-dev clang-17 lld-17
 
 # Clone and build
-git clone https://github.com/izel-lang/izel.git
+git clone https://github.com/VoxDroid/izel.git
 cd izel
 cargo build --workspace
 

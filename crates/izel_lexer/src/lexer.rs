@@ -155,7 +155,7 @@ impl<'a> Lexer<'a> {
             // Strings & Chars
             '"' => self.lex_string(),
             '\'' => self.lex_char(),
-            '`' => TokenKind::Unknown, // Interpolated string start handled separately if needed
+            '`' => self.lex_interpolated_string(),
 
             _ => TokenKind::Unknown,
         };
@@ -276,6 +276,19 @@ impl<'a> Lexer<'a> {
             }
         }
         TokenKind::Str { terminated }
+    }
+    fn lex_interpolated_string(&mut self) -> TokenKind {
+        let mut terminated = false;
+        while let Some(c) = self.cursor.bump() {
+            if c == '`' {
+                terminated = true;
+                break;
+            }
+            if c == '\\' {
+                self.cursor.bump();
+            }
+        }
+        TokenKind::InterpolatedStr { terminated }
     }
 
     fn lex_byte_string(&mut self) -> TokenKind {
