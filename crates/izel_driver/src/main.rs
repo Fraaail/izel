@@ -29,6 +29,10 @@ fn main() -> Result<()> {
     let mut parser = izel_parser::Parser::new(tokens);
     let cst = parser.parse_source_file();
     
+    println!("Lowering to MIR...");
+    let mut _lowerer = izel_mir::lower::MirLowerer::new(&source);
+    // Future: lowerer.lower_source_file(&cst);
+
     println!("Generating LLVM IR...");
     let context = inkwell::context::Context::create();
     let mut codegen = izel_codegen::Codegen::new(&context, "main", &source);
@@ -44,6 +48,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn print_cst(element: &izel_parser::cst::SyntaxElement, indent: usize) {
     let space = "  ".repeat(indent);
     match element {

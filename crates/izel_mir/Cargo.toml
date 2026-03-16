@@ -1,5 +1,5 @@
 [package]
-name = "izel_codegen"
+name = "izel_mir"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,6 +10,5 @@ repository.workspace = true
 izel_span = { path = "../izel_span" }
 izel_lexer = { path = "../izel_lexer" }
 izel_parser = { path = "../izel_parser" }
-inkwell = { workspace = true }
-anyhow = { workspace = true }
-tracing = { workspace = true }
+petgraph = { workspace = true }
+indexmap = { workspace = true }

@@ -12,7 +12,9 @@ izel_session = { path = "../izel_session" }
 izel_lexer = { path = "../izel_lexer" }
 izel_parser = { path = "../izel_parser" }
 izel_codegen = { path = "../izel_codegen" }
+izel_mir = { path = "../izel_mir" }
 izel_diagnostics = { path = "../izel_diagnostics" }
+inkwell = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }

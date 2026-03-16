@@ -3,7 +3,7 @@
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::FunctionValue;
 use izel_parser::cst::{SyntaxNode, SyntaxElement, NodeKind};
 use izel_lexer::TokenKind;
 use anyhow::{Result, anyhow};
