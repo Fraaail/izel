@@ -12,6 +12,8 @@ pub enum NodeKind {
     DualDecl,
     WeaveDecl,
     ImplBlock,
+    TypeAlias,
+    Type,
     DrawDecl,
     GenericParams,
     GenericParam,

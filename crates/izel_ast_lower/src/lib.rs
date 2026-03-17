@@ -33,6 +33,7 @@ impl<'a> Lowerer<'a> {
             NodeKind::WardDecl => Some(ast::Item::Ward(self.lower_ward(node))),
             NodeKind::DrawDecl => Some(ast::Item::Draw(self.lower_draw(node))),
             NodeKind::ImplBlock => Some(ast::Item::Impl(self.lower_impl(node))),
+            NodeKind::TypeAlias => Some(ast::Item::Alias(self.lower_alias(node))),
             _ => None,
         }
     }
@@ -48,7 +49,7 @@ impl<'a> Lowerer<'a> {
 
         for child in &node.children {
             match child {
-                SyntaxElement::Token(token) if token.kind == TokenKind::Ident => {
+                SyntaxElement::Token(token) if matches!(token.kind, TokenKind::SelfKw | TokenKind::Ident | TokenKind::Next | TokenKind::Loop | TokenKind::Each | TokenKind::While | TokenKind::Break | TokenKind::Give | TokenKind::Type | TokenKind::Forge) => {
                     name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::GenericParams => {
@@ -92,7 +93,7 @@ impl<'a> Lowerer<'a> {
 
         for child in &node.children {
             match child {
-                SyntaxElement::Token(token) if token.kind == TokenKind::Ident => {
+                SyntaxElement::Token(token) if matches!(token.kind, TokenKind::SelfKw | TokenKind::Ident | TokenKind::Next | TokenKind::Loop | TokenKind::Each | TokenKind::While | TokenKind::Break | TokenKind::Give | TokenKind::Type | TokenKind::Forge) => {
                     name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::GenericParams => {
@@ -119,7 +120,7 @@ impl<'a> Lowerer<'a> {
 
         for child in &node.children {
             match child {
-                SyntaxElement::Token(token) if token.kind == TokenKind::Ident => {
+                SyntaxElement::Token(token) if matches!(token.kind, TokenKind::SelfKw | TokenKind::Ident | TokenKind::Next | TokenKind::Loop | TokenKind::Each | TokenKind::While | TokenKind::Break | TokenKind::Give | TokenKind::Type | TokenKind::Forge) => {
                     name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
                 }
                 SyntaxElement::Node(n) => {
@@ -132,22 +133,46 @@ impl<'a> Lowerer<'a> {
         ast::Field { name, ty, span: node.span() }
     }
 
-    fn lower_generic_params(&self, node: &SyntaxNode) -> Vec<String> {
+    fn lower_generic_params(&self, node: &SyntaxNode) -> Vec<ast::GenericParam> {
         let mut params = Vec::new();
         for child in &node.children {
             if let SyntaxElement::Node(n) = child {
                 if n.kind == NodeKind::GenericParam {
-                    for gc in &n.children {
-                        if let SyntaxElement::Token(t) = gc {
-                            if t.kind == TokenKind::Ident {
-                                params.push(self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string());
-                            }
-                        }
-                    }
+                    params.push(self.lower_generic_param(n));
                 }
             }
         }
         params
+    }
+
+    fn lower_generic_param(&self, node: &SyntaxNode) -> ast::GenericParam {
+        let mut name = String::new();
+        let mut bounds = Vec::new();
+        let mut in_bounds = false;
+        
+        for child in &node.children {
+            if let SyntaxElement::Token(t) = child {
+                match t.kind {
+                    TokenKind::Ident => {
+                        if in_bounds {
+                            bounds.push(self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string());
+                        } else {
+                            name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                        }
+                    }
+                    TokenKind::Colon => {
+                        in_bounds = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        ast::GenericParam {
+            name,
+            bounds,
+            span: node.span(),
+        }
     }
 
     fn lower_param(&self, node: &SyntaxNode) -> ast::Param {
@@ -156,7 +181,7 @@ impl<'a> Lowerer<'a> {
 
         for child in &node.children {
             match child {
-                SyntaxElement::Token(token) if token.kind == TokenKind::Ident => {
+                SyntaxElement::Token(token) if matches!(token.kind, TokenKind::SelfKw | TokenKind::Ident | TokenKind::Next | TokenKind::Loop | TokenKind::Each | TokenKind::While | TokenKind::Break | TokenKind::Give | TokenKind::Type | TokenKind::Forge) => {
                     name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
                 }
                 SyntaxElement::Node(n) => {
@@ -305,7 +330,7 @@ impl<'a> Lowerer<'a> {
             NodeKind::Ident => {
                  for child in &node.children {
                       if let SyntaxElement::Token(token) = child {
-                           if token.kind == TokenKind::Ident {
+                           if matches!(token.kind, TokenKind::SelfKw | TokenKind::Ident | TokenKind::Next | TokenKind::Loop | TokenKind::Each | TokenKind::While | TokenKind::Break | TokenKind::Give | TokenKind::Type | TokenKind::Forge) {
                                 let text = &self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
                                 return ast::Expr::Ident(text.clone(), token.span);
                            }
@@ -570,13 +595,37 @@ impl<'a> Lowerer<'a> {
         ast::Variant { name, fields, span: node.span() }
     }
 
-    fn lower_weave(&self, node: &SyntaxNode) -> ast::Weave {
+    fn lower_alias(&self, node: &SyntaxNode) -> ast::Alias {
         let mut name = String::new();
-        let mut methods = Vec::new();
+        let mut ty = ast::Type::Error;
+        
         for child in &node.children {
             match child {
                 SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
                     name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::Type => {
+                    ty = self.lower_type(n);
+                }
+                _ => {}
+            }
+        }
+        
+        ast::Alias { name, ty, span: node.span() }
+    }
+    fn lower_weave(&self, node: &SyntaxNode) -> ast::Weave {
+        let mut name = String::new();
+        let mut associated_types = Vec::new();
+        let mut methods = Vec::new();
+        
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
+                    name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::TypeAlias => {
+                    let alias = self.lower_alias(n);
+                    associated_types.push(alias.name);
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::ForgeDecl => {
                     methods.push(self.lower_forge(n));
@@ -584,7 +633,13 @@ impl<'a> Lowerer<'a> {
                 _ => {}
             }
         }
-        ast::Weave { name, methods, span: node.span() }
+        
+        ast::Weave {
+            name,
+            associated_types,
+            methods,
+            span: node.span(),
+        }
     }
 
     fn lower_ward(&self, node: &SyntaxNode) -> ast::Ward {
@@ -635,23 +690,31 @@ impl<'a> Lowerer<'a> {
                 SyntaxElement::Token(t) if t.kind == TokenKind::For => {
                      found_for = true;
                 }
-                SyntaxElement::Node(n) if n.kind == NodeKind::ForgeDecl || n.kind == NodeKind::LetStmt => {
+                SyntaxElement::Node(n) if n.kind == NodeKind::ForgeDecl || n.kind == NodeKind::TypeAlias => {
                      if let Some(item) = self.lower_item(n) {
                           items.push(item);
                      }
                 }
-                SyntaxElement::Node(n) => {
-                     let ty = self.lower_type(n);
-                     if found_for {
-                          target = ty;
-                     } else {
+                SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
+                     let ty = ast::Type::Prim(self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string());
+                     if !found_for {
                           weave = Some(ty);
+                     } else {
+                          target = ty;
+                     }
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::Type => {
+                     let ty = self.lower_type(n);
+                     if !found_for {
+                          weave = Some(ty);
+                     } else {
+                          target = ty;
                      }
                 }
                 _ => {}
             }
         }
-        // If no 'for' was found, the first type found is actually the target
+        
         if !found_for && weave.is_some() {
              target = weave.take().unwrap();
         }

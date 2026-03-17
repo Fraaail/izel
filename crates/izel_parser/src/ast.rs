@@ -12,6 +12,7 @@ pub enum Item {
     Scroll(Scroll),
     Weave(Weave),
     Impl(Impl),
+    Alias(Alias),
     Ward(Ward),
     Draw(Draw),
 }
@@ -19,11 +20,18 @@ pub enum Item {
 #[derive(Debug, Clone)]
 pub struct Forge {
     pub name: String,
-    pub generic_params: Vec<String>,
+    pub generic_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub ret_type: Type,
     pub effects: Vec<String>,
     pub body: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenericParam {
+    pub name: String,
+    pub bounds: Vec<String>,
     pub span: Span,
 }
 
@@ -37,7 +45,7 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct Shape {
     pub name: String,
-    pub generic_params: Vec<String>,
+    pub generic_params: Vec<GenericParam>,
     pub fields: Vec<Field>,
     pub span: Span,
 }
@@ -66,6 +74,7 @@ pub struct Variant {
 #[derive(Debug, Clone)]
 pub struct Weave {
     pub name: String,
+    pub associated_types: Vec<String>,
     pub methods: Vec<Forge>,
     pub span: Span,
 }
@@ -75,6 +84,13 @@ pub struct Impl {
     pub target: Type,
     pub weave: Option<Type>,
     pub items: Vec<Item>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Alias {
+    pub name: String,
+    pub ty: Type,
     pub span: Span,
 }
 

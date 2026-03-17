@@ -33,6 +33,9 @@ pub enum Type {
     /// Tuple or anonymous shapes
     Static(Vec<(String, Type)>),
     
+    /// Associated type (e.g. Iterator::Item)
+    Assoc(Box<Type>, String),
+    
     /// Error sentinel
     Error,
 }
@@ -75,5 +78,7 @@ pub struct Scheme {
     pub effect_vars: Vec<usize>,
     /// Named generic parameters (<T>)
     pub names: Vec<String>,
+    /// Bounds for generic parameters: (param_name, weave_name)
+    pub bounds: Vec<(String, String)>,
     pub ty: Type,
 }

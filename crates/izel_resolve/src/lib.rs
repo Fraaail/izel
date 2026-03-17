@@ -106,9 +106,8 @@ impl Resolver {
                     NodeKind::ScrollDecl => self.resolve_named_decl(child_node, TokenKind::Scroll, source),
                     NodeKind::WardDecl => self.resolve_ward_decl(child_node, source),
                     NodeKind::DualDecl => self.resolve_named_decl(child_node, TokenKind::Dual, source),
-                    NodeKind::ImplBlock => self.resolve_children(child_node, source),
-                    NodeKind::WeaveDecl => self.resolve_named_decl(child_node, TokenKind::Weave, source),
-                    NodeKind::DrawDecl => self.resolve_draw_decl(child_node, source),
+                    NodeKind::ImplBlock => self.resolve_impl_block(child_node, source),
+                    NodeKind::TypeAlias => self.resolve_named_decl(child_node, TokenKind::Type, source),
                     NodeKind::Block => self.resolve_block(child_node, source),
                     NodeKind::LetStmt => self.resolve_let_stmt(child_node, source),
                     NodeKind::Ident => {
@@ -133,6 +132,21 @@ impl Resolver {
                 if child_node.kind == NodeKind::Block {
                     self.resolve_block(child_node, source);
                 }
+            }
+        }
+    }
+
+    fn resolve_impl_block(&mut self, node: &SyntaxNode, source: &str) {
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
+                    let name = source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                    if let Some(sym) = self.current_scope.resolve(&name) {
+                        println!("Resolved impl ref: {} to DefId({:?})", name, sym.def_id);
+                    }
+                }
+                SyntaxElement::Node(n) => self.resolve_children(n, source),
+                _ => {}
             }
         }
     }
@@ -172,17 +186,22 @@ impl Resolver {
     fn resolve_named_decl(&mut self, node: &SyntaxNode, keyword: TokenKind, source: &str) {
         let mut found_kw = false;
         for child in &node.children {
-            if let SyntaxElement::Token(token) = child {
-                if token.kind == keyword {
-                    found_kw = true;
-                } else if found_kw && token.kind == TokenKind::Ident {
-                    let span = token.span;
-                    let name = source[span.lo.0 as usize..span.hi.0 as usize].to_string();
-                    let id = self.next_id();
-                    
-                    self.current_scope.define(name, span, id);
-                    break;
+            match child {
+                SyntaxElement::Token(token) => {
+                    if token.kind == keyword {
+                        found_kw = true;
+                    } else if found_kw && token.kind == TokenKind::Ident {
+                        let span = token.span;
+                        let name = source[span.lo.0 as usize..span.hi.0 as usize].to_string();
+                        let id = self.next_id();
+                        self.current_scope.define(name, span, id);
+                        found_kw = false; // reset to avoid matching subsequent idents
+                    }
                 }
+                SyntaxElement::Node(n) => {
+                    self.resolve_children(n, source);
+                }
+                _ => {}
             }
         }
     }

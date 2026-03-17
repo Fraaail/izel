@@ -1,0 +1,43 @@
+weave Iterator {
+    type Item
+    forge next(self) -> ?Item
+}
+
+shape Range {
+    start: i32,
+    end: i32
+}
+
+impl Iterator for Range {
+    type Item = i32
+    
+    forge next(self) -> ?i32 {
+        if self.start < self.end {
+            let res = self.start;
+            self.start = self.start + 1;
+            Give res
+        } else {
+            Nil
+        }
+    }
+}
+
+forge print_items<T: Iterator>(iter: T) {
+    loop {
+        let item = iter.next();
+        match item {
+            item => {
+                // Should infer item: i32
+                echo item;
+            }
+            Nil => {
+                break;
+            }
+        }
+    }
+}
+
+forge main() {
+    let r = Range { start: 0, end: 5 };
+    print_items(r);
+}

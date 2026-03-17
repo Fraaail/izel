@@ -19,6 +19,8 @@ pub struct TypeChecker {
     pub current_effects: Vec<EffectSet>,
     next_var: usize,
     next_effect_var: usize,
+    pub weaves: FxHashMap<String, ast::Weave>,
+    pub trait_impls: FxHashMap<String, Vec<(Type, ast::Impl)>>,
 }
 
 impl TypeChecker {
@@ -36,6 +38,8 @@ impl TypeChecker {
             current_effects: Vec::new(),
             next_var: 0,
             next_effect_var: 0,
+            weaves: FxHashMap::default(),
+            trait_impls: FxHashMap::default(),
         }
     }
 
@@ -57,7 +61,7 @@ impl TypeChecker {
 
     pub fn define(&mut self, name: String, ty: Type) {
         if let Some(scope) = self.env.last_mut() {
-            scope.insert(name, Scheme { vars: vec![], effect_vars: vec![], names: vec![], ty });
+            scope.insert(name, Scheme { vars: vec![], effect_vars: vec![], names: vec![], bounds: vec![], ty });
         }
     }
 
@@ -104,50 +108,121 @@ impl TypeChecker {
 
         // Pass 2: Check bodies
         for item in &module.items {
-            match item {
-                ast::Item::Forge(f) => {
-                     self.push_scope();
-                     let ret_ty = self.lower_ast_type(&f.ret_type);
-                     let old_ret = self.expected_ret.replace(ret_ty.clone());
-                     
-                     for param in &f.params {
-                          let pty = self.lower_ast_type(&param.ty);
-                          self.define(param.name.clone(), pty);
+            self.check_item(item);
+        }
+    }
+
+    fn check_item(&mut self, item: &ast::Item) {
+        match item {
+            ast::Item::Forge(f) => {
+                self.check_forge(f)
+            },
+            ast::Item::Impl(i) => {
+                self.check_impl(i);
+                for it in &i.items {
+                    self.check_item(it);
+                }
+            }
+            ast::Item::Ward(w) => {
+                for it in &w.items {
+                    self.check_item(it);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn check_forge(&mut self, f: &ast::Forge) {
+         self.push_scope();
+         
+         // Define generic parameters in scope
+         for gp in &f.generic_params {
+             self.define(gp.name.clone(), Type::Param(gp.name.clone()));
+         }
+
+         let ret_ty = self.lower_ast_type(&f.ret_type);
+         let old_ret = self.expected_ret.replace(ret_ty.clone());
+         
+         for param in &f.params {
+              let pty = self.lower_ast_type(&param.ty);
+              self.define(param.name.clone(), pty.clone());
+         }
+         
+         if let Some(body) = &f.body {
+             let body_effects = self.new_effect_var();
+             self.current_effects.push(body_effects.clone());
+             self.check_block_with_expected(body, Some(&ret_ty));
+             let collected = self.current_effects.pop().unwrap();
+             
+             // Unify body effects with declared/inferred effects
+             if let Some(sig) = self.resolve_name(&f.name) {
+                 if let Type::Function { effects: declared, .. } = self.prune(&sig) {
+                     if !self.unify_effects(&collected, &declared) {
+                         // TODO: Proper diagnostic
+                             f.name, self.prune_effects(&collected), self.prune_effects(&declared));
                      }
-                     
-                     if let Some(body) = &f.body {
-                         let body_effects = self.new_effect_var();
-                         self.current_effects.push(body_effects.clone());
-                         self.check_block_with_expected(body, Some(&ret_ty));
-                         let collected = self.current_effects.pop().unwrap();
+                 }
+             }
+         }
+         
+         self.expected_ret = old_ret;
+         self.pop_scope();
+    }
+
+    fn check_impl(&mut self, i: &ast::Impl) {
+        let target = self.lower_ast_type(&i.target);
+        if let Some(weave_ty) = &i.weave {
+             if let ast::Type::Prim(weave_name) = weave_ty {
+                 if let Some(w) = self.weaves.get(weave_name).cloned() {
+                     for expected_method in &w.methods {
+                         let found = i.items.iter().find(|item| {
+                             if let ast::Item::Forge(f) = item {
+                                 f.name == expected_method.name
+                             } else { false }
+                         });
                          
-                         // Unify body effects with declared/inferred effects
-                         if let Some(sig) = self.resolve_name(&f.name) {
-                             if let Type::Function { effects: declared, .. } = self.prune(&sig) {
-                                 if !self.unify_effects(&collected, &declared) {
-                                     // TODO: Proper diagnostic
-                                     println!("Effect Error: Function {} body effects ({:?}) do not match declared/inferred effects ({:?})", 
-                                         f.name, self.prune_effects(&collected), self.prune_effects(&declared));
-                                 }
-                             }
+                         if found.is_none() {
                          }
                      }
-                     
-                     self.expected_ret = old_ret;
-                     self.pop_scope();
-                }
-                _ => {}
-            }
+                 }
+             }
         }
     }
 
     fn collect_item_signature(&mut self, item: &ast::Item) {
         match item {
+            ast::Item::Weave(w) => {
+                self.weaves.insert(w.name.clone(), w.clone());
+                self.define(w.name.clone(), Type::Prim(PrimType::Void));
+            }
+            ast::Item::Impl(i) => {
+                let target = self.lower_ast_type(&i.target);
+                if let Some(weave_ty) = &i.weave {
+                    if let ast::Type::Prim(weave_name) = weave_ty {
+                        self.trait_impls.entry(weave_name.clone())
+                            .or_default()
+                            .push((target, i.clone()));
+                    }
+                }
+                // Signatures of items inside impl should also be collected
+                for it in &i.items {
+                    self.collect_item_signature(it);
+                }
+            }
+            ast::Item::Ward(w) => {
+                for it in &w.items {
+                    self.collect_item_signature(it);
+                }
+            }
             ast::Item::Forge(f) => {
                 self.push_scope();
+                let mut bounds = Vec::new();
                 // Map generic params to Type::Param
                 for gp in &f.generic_params {
-                    self.define(gp.clone(), Type::Param(gp.clone()));
+                    self.define(gp.name.clone(), Type::Param(gp.name.clone()));
+                    for b in &gp.bounds {
+                        bounds.push((gp.name.clone(), b.clone()));
+                    }
                 }
                 
                 let mut params = Vec::new();
@@ -183,25 +258,35 @@ impl TypeChecker {
                 
                 self.pop_scope();
                 
-                // Generalize it (it will pick up any Vars if any, but mostly we want it to be a Scheme if it has Params)
-                let scheme = self.generalize(&ty);
+                // Generalize it
+                let mut scheme = self.generalize(&ty);
+                scheme.bounds = bounds;
                 self.define_scheme(f.name.clone(), scheme);
             }
             ast::Item::Shape(s) => {
                 self.push_scope();
+                let mut bounds = Vec::new();
                 for gp in &s.generic_params {
-                    self.define(gp.clone(), Type::Param(gp.clone()));
+                    self.define(gp.name.clone(), Type::Param(gp.name.clone()));
+                    for b in &gp.bounds {
+                        bounds.push((gp.name.clone(), b.clone()));
+                    }
                 }
                 
                 let mut fields = vec![];
                 for f in &s.fields {
                     fields.push((f.name.clone(), self.lower_ast_type(&f.ty)));
                 }
-                let ty = Type::Static(fields);
+                let ty = Type::Adt(DefId(0)); // Placeholder for actual DefId logic
                 self.pop_scope();
                 
-                let scheme = self.generalize(&ty);
+                let mut scheme = self.generalize(&ty);
+                scheme.bounds = bounds;
                 self.define_scheme(s.name.clone(), scheme);
+            }
+            ast::Item::Alias(a) => {
+                let ty = self.lower_ast_type(&a.ty);
+                self.define(a.name.clone(), ty);
             }
             _ => {}
         }
@@ -279,11 +364,24 @@ impl TypeChecker {
                 Type::Pointer(Box::new(inner_ty), *m)
             }
             ast::Type::Path(parts, _gen_args) => {
-                let name = parts.join("::");
-                if let Some(t) = self.resolve_name(&name) {
-                    t
+                if parts.len() > 1 {
+                    // Very simple resolver: first part is the base, next is associated type
+                    let mut current = if let Some(t) = self.resolve_name(&parts[0]) {
+                        t
+                    } else {
+                        Type::Error
+                    };
+                    for part in &parts[1..] {
+                        current = Type::Assoc(Box::new(current), part.clone());
+                    }
+                    current
                 } else {
-                    Type::Error
+                    let name = parts.join("::");
+                    if let Some(t) = self.resolve_name(&name) {
+                        t
+                    } else {
+                        Type::Error
+                    }
                 }
             }
             ast::Type::SelfType => self.resolve_name("Self").unwrap_or(Type::Error),
@@ -294,6 +392,19 @@ impl TypeChecker {
     pub fn unify(&mut self, t1: &Type, t2: &Type) -> bool {
         let t1 = self.prune(t1);
         let t2 = self.prune(t2);
+
+        if let Type::Assoc(base, name) = &t1 {
+            let resolved = self.resolve_assoc_type(base, name);
+            if resolved != Type::Error {
+                return self.unify(&resolved, &t2);
+            }
+        }
+        if let Type::Assoc(base, name) = &t2 {
+            let resolved = self.resolve_assoc_type(base, name);
+            if resolved != Type::Error {
+                return self.unify(&t1, &resolved);
+            }
+        }
 
         match (&t1, &t2) {
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => true,
@@ -342,6 +453,31 @@ impl TypeChecker {
                 false
             }
         }
+    }
+
+    fn resolve_assoc_type(&mut self, base: &Type, name: &str) -> Type {
+        let base = self.prune(base);
+        // Look through all trait implementations
+        // Clone the list of impls to avoid borrow conflict with self.lower_ast_type
+        let all_impls: Vec<_> = self.trait_impls.values().flatten().cloned().collect();
+        
+        for (impl_ty, i) in all_impls {
+            // If the base type matches the impl target type
+            if self.unify_without_binding(&base, &impl_ty) {
+                for item in &i.items {
+                    if let ast::Item::Alias(a) = item {
+                         if a.name == name {
+                             return self.lower_ast_type(&a.ty);
+                         }
+                    }
+                }
+            }
+        }
+        Type::Error
+    }
+
+    fn unify_without_binding(&mut self, t1: &Type, t2: &Type) -> bool {
+        t1 == t2
     }
 
     pub fn unify_effects(&mut self, e1: &EffectSet, e2: &EffectSet) -> bool {
@@ -563,10 +699,57 @@ impl TypeChecker {
                 if let Some(target) = self.expected_ret.clone() {
                     self.unify(&ty, &target);
                 }
-                // Return expression itself has an unconstrained type (diverges)
-                self.new_var()
+                Type::Error
             }
-            _ => self.new_var(),
+            ast::Expr::Next | ast::Expr::Break => Type::Prim(PrimType::Void),
+            ast::Expr::Loop(block) => {
+                self.check_block(block);
+                Type::Prim(PrimType::Void)
+            }
+            ast::Expr::While { cond, body } => {
+                let ct = self.infer_expr(cond);
+                self.unify(&ct, &Type::Prim(PrimType::Bool));
+                self.check_block(body);
+                Type::Prim(PrimType::Void)
+            }
+            ast::Expr::Each { var, iter, body } => {
+                let _it = self.infer_expr(iter);
+                let item_ty = self.new_var();
+                self.push_scope();
+                self.define(var.clone(), item_ty);
+                self.check_block(body);
+                self.pop_scope();
+                Type::Prim(PrimType::Void)
+            }
+            ast::Expr::Bind { params, body } => {
+                self.push_scope();
+                let mut param_tys = Vec::new();
+                for p in params {
+                    let pt = self.new_var();
+                    self.define(p.clone(), pt.clone());
+                    param_tys.push(pt);
+                }
+                let ret = self.infer_expr(body);
+                self.pop_scope();
+                Type::Function {
+                    params: param_tys,
+                    ret: Box::new(ret),
+                    effects: self.new_effect_var(),
+                }
+            }
+            ast::Expr::Block(block) => {
+                let res_ty = self.new_var();
+                self.check_block_with_expected(block, Some(&res_ty));
+                res_ty
+            }
+            ast::Expr::Path(segments, _generics) => {
+                if segments.len() == 1 {
+                    if let Some(ty) = self.resolve_name(&segments[0]) {
+                        return ty;
+                    }
+                }
+                Type::Error
+            }
         };
         // TODO: Store in expr_types
         res
@@ -645,7 +828,7 @@ impl TypeChecker {
         let mut seen_effects = std::collections::HashSet::new();
         let mut seen_names = std::collections::HashSet::new();
         self.find_gen_vars(ty, &mut vars, &mut seen, &mut effect_vars, &mut seen_effects, &mut names, &mut seen_names);
-        Scheme { vars, effect_vars, names, ty: ty.clone() }
+        Scheme { vars, effect_vars, names, bounds: vec![], ty: ty.clone() }
     }
 
     fn find_gen_vars(
@@ -688,6 +871,9 @@ impl TypeChecker {
                     self.find_gen_vars(&t, vars, seen, effect_vars, seen_effects, names, seen_names);
                 }
             }
+            Type::Assoc(base, _) => {
+                self.find_gen_vars(&base, vars, seen, effect_vars, seen_effects, names, seen_names);
+            }
             _ => {}
         }
     }
@@ -728,7 +914,34 @@ impl TypeChecker {
         for name in &scheme.names {
             name_mapping.insert(name.clone(), self.new_var());
         }
-        self.substitute_scheme(&scheme.ty, &mapping, &effect_mapping, &name_mapping)
+        
+        let ty = self.substitute_scheme(&scheme.ty, &mapping, &effect_mapping, &name_mapping);
+        
+        for (param, bound) in &scheme.bounds {
+            if let Some(ty) = name_mapping.get(param) {
+                self.verify_bound(ty, bound);
+            }
+        }
+        
+        ty
+    }
+
+    fn verify_bound(&mut self, ty: &Type, weave_name: &str) {
+        let ty = self.prune(ty);
+        if let Type::Var(_) = ty {
+            // Delay check
+            return;
+        }
+        
+        if let Some(impls) = self.trait_impls.get(weave_name) {
+            // Very simple check: see if any impl matches the pruned type
+            for (impl_ty, _) in impls {
+                // We use a clone of self or a non-mutating check if possible
+                // For now, let's just do a simple check
+                if impl_ty == &ty { return; }
+            }
+        }
+        
     }
 
     fn substitute_scheme(
@@ -764,6 +977,10 @@ impl TypeChecker {
             Type::Static(fields) => Type::Static(
                 fields.iter().map(|(n, t)| (n.clone(), self.substitute_scheme(t, mapping, effect_mapping, name_mapping))).collect()
             ),
+            Type::Assoc(base, name) => {
+                let new_base = self.substitute_scheme(base, mapping, effect_mapping, name_mapping);
+                Type::Assoc(Box::new(new_base), name.clone())
+            }
             _ => ty.clone(),
         }
     }
