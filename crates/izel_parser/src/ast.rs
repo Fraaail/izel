@@ -6,6 +6,13 @@ pub struct Module {
 }
 
 #[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: String,
+    pub args: Vec<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum Item {
     Forge(Forge),
     Shape(Shape),
@@ -24,6 +31,7 @@ pub struct Forge {
     pub params: Vec<Param>,
     pub ret_type: Type,
     pub effects: Vec<String>,
+    pub attributes: Vec<Attribute>,
     pub body: Option<Block>,
     pub span: Span,
 }
@@ -47,6 +55,7 @@ pub struct Shape {
     pub name: String,
     pub generic_params: Vec<GenericParam>,
     pub fields: Vec<Field>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -61,6 +70,7 @@ pub struct Field {
 pub struct Scroll {
     pub name: String,
     pub variants: Vec<Variant>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -76,6 +86,7 @@ pub struct Weave {
     pub name: String,
     pub associated_types: Vec<String>,
     pub methods: Vec<Forge>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -84,6 +95,7 @@ pub struct Impl {
     pub target: Type,
     pub weave: Option<Type>,
     pub items: Vec<Item>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -91,6 +103,7 @@ pub struct Impl {
 pub struct Alias {
     pub name: String,
     pub ty: Type,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -98,6 +111,7 @@ pub struct Alias {
 pub struct Ward {
     pub name: String,
     pub items: Vec<Item>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -137,6 +151,7 @@ pub enum Expr {
         iter: Box<Expr>,
         body: Block,
     },
+    Raw(Box<Expr>),
     Bind {
         params: Vec<String>,
         body: Box<Expr>,
@@ -199,13 +214,14 @@ pub enum Type {
     Optional(Box<Type>),
     Cascade(Box<Type>),
     Pointer(Box<Type>, bool), // bool is mut
+    Witness(Box<Type>),
+    SelfType,
+    Error,
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
         effects: Vec<String>,
     },
-    SelfType,
-    Error,
 }
 
 #[derive(Debug, Clone)]

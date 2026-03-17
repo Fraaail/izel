@@ -30,6 +30,12 @@ impl Parser {
     pub fn parse_decl(&mut self) -> SyntaxNode {
         let mut children = self.eat_trivia();
         
+        // Handle attributes (@attr or @attr(args))
+        if self.current_kind() == TokenKind::At {
+             children.push(SyntaxElement::Node(self.parse_attributes()));
+             children.extend(self.eat_trivia().into_iter());
+        }
+        
         // Handle modifiers (open/hidden/pure/sole/etc)
         while matches!(self.current_kind(), TokenKind::Open | TokenKind::Hidden | TokenKind::Pure | TokenKind::Sole) {
              children.push(SyntaxElement::Token(self.bump()));
@@ -286,12 +292,23 @@ impl Parser {
                   children.push(SyntaxElement::Node(self.parse_type()));
                   SyntaxNode::new(NodeKind::PointerType, children)
              }
+             TokenKind::Raw => {
+                 self.parse_raw_expr()
+             }
              _ => {
                   let mut res = self.parse_expr(Precedence::Call);
                   self.eat_trivia();
                   if self.current_kind() == TokenKind::Bang {
                        res = self.parse_postfix_bang(res);
                   }
+                  
+                  // If we have Lt after an Ident, it's likely a generic type
+                  if res.kind == NodeKind::Ident && self.current_kind() == TokenKind::Lt {
+                       let mut children = vec![SyntaxElement::Node(res)];
+                       children.push(SyntaxElement::Node(self.parse_generic_args()));
+                       res = SyntaxNode::new(NodeKind::Type, children); 
+                  }
+                  
                   res
              }
         }
@@ -690,5 +707,49 @@ impl Parser {
              results.extend(self.eat_trivia().into_iter());
         }
         results
+    }
+
+    fn parse_raw_expr(&mut self) -> SyntaxNode {
+        let mut children = vec![];
+        children.push(SyntaxElement::Token(self.bump())); // raw
+        children.extend(self.eat_trivia().into_iter());
+        children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+        SyntaxNode::new(NodeKind::RawExpr, children)
+    }
+
+    fn parse_attributes(&mut self) -> SyntaxNode {
+        let mut children = vec![];
+        while self.current_kind() == TokenKind::At {
+            children.push(SyntaxElement::Node(self.parse_attribute()));
+            children.extend(self.eat_trivia().into_iter());
+        }
+        SyntaxNode::new(NodeKind::Attributes, children)
+    }
+
+    fn parse_attribute(&mut self) -> SyntaxNode {
+        let mut children = self.eat_trivia();
+        if self.current_kind() == TokenKind::At {
+            children.push(SyntaxElement::Token(self.bump())); // @
+            children.extend(self.eat_trivia().into_iter());
+            if self.is_naming_ident() {
+                children.push(SyntaxElement::Token(self.bump())); // name
+            }
+            children.extend(self.eat_trivia().into_iter());
+            if self.current_kind() == TokenKind::OpenParen {
+                children.push(SyntaxElement::Token(self.bump())); // (
+                while self.current_kind() != TokenKind::CloseParen && self.current_kind() != TokenKind::Eof {
+                    children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+                    children.extend(self.eat_trivia().into_iter());
+                    if self.current_kind() == TokenKind::Comma {
+                        children.push(SyntaxElement::Token(self.bump()));
+                        children.extend(self.eat_trivia().into_iter());
+                    }
+                }
+                if self.current_kind() == TokenKind::CloseParen {
+                    children.push(SyntaxElement::Token(self.bump())); // )
+                }
+            }
+        }
+        SyntaxNode::new(NodeKind::Attribute, children)
     }
 }

@@ -13,3 +13,7 @@ izel_parser = { path = "../izel_parser" }
 rustc-hash = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+izel_lexer = { path = "../izel_lexer" }
+izel_ast_lower = { path = "../izel_ast_lower" }

@@ -130,14 +130,14 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Check `forge f() !effect` annotations at call sites.
 
 ### 2.2 `izel_borrow` (Ownership System)
-- [ ] **Ownership Tracking**:
-    - [ ] Map movements of bindings (consume vs borrow).
-- [ ] **Region Inference (NLL)**:
-    - [ ] Build Control Flow Graph (CFG).
-    - [ ] Calculate live ranges for every binding.
-    - [ ] Enforce "One Mutable XOR Many Immutable" rule.
-- [ ] **Lifetime Annotations**:
-    - [ ] Allow explicit `'a` elision and verification.
+- [x] **Ownership Tracking**:
+    - [x] Map movements of bindings (consume vs borrow).
+- [x] **Region Inference (NLL)**:
+    - [x] Build Control Flow Graph (CFG).
+    - [x] Calculate live ranges for every binding.
+    - [x] Enforce "One Mutable XOR Many Immutable" rule.
+- [x] **Lifetime Annotations**:
+    - [x] Allow explicit `'a` elision and verification.
 
 ---
 

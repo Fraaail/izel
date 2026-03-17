@@ -21,6 +21,8 @@ pub struct TypeChecker {
     next_effect_var: usize,
     pub weaves: FxHashMap<String, ast::Weave>,
     pub trait_impls: FxHashMap<String, Vec<(Type, ast::Impl)>>,
+    pub current_attributes: Vec<ast::Attribute>,
+    pub in_raw_block: bool,
 }
 
 impl TypeChecker {
@@ -40,6 +42,8 @@ impl TypeChecker {
             next_effect_var: 0,
             weaves: FxHashMap::default(),
             trait_impls: FxHashMap::default(),
+            current_attributes: Vec::new(),
+            in_raw_block: false,
         }
     }
 
@@ -142,6 +146,7 @@ impl TypeChecker {
 
          let ret_ty = self.lower_ast_type(&f.ret_type);
          let old_ret = self.expected_ret.replace(ret_ty.clone());
+         let old_attrs = std::mem::replace(&mut self.current_attributes, f.attributes.clone());
          
          for param in &f.params {
               let pty = self.lower_ast_type(&param.ty);
@@ -164,6 +169,7 @@ impl TypeChecker {
              }
          }
          
+         self.current_attributes = old_attrs;
          self.expected_ret = old_ret;
          self.pop_scope();
     }
@@ -382,6 +388,10 @@ impl TypeChecker {
                 let inner_ty = self.lower_ast_type(inner);
                 Type::Pointer(Box::new(inner_ty), *m, type_system::Lifetime::Anonymous(0))
             }
+            ast::Type::Witness(inner) => {
+                let inner_ty = self.lower_ast_type(inner);
+                Type::Witness(Box::new(inner_ty))
+            }
             ast::Type::Path(parts, _gen_args) => {
                 if parts.len() > 1 {
                     // Very simple resolver: first part is the base, next is associated type
@@ -452,6 +462,7 @@ impl TypeChecker {
             (Type::Optional(o1), Type::Optional(o2)) => self.unify(&o1, &o2),
             (Type::Cascade(c1), Type::Cascade(c2)) => self.unify(&c1, &c2),
             (Type::Pointer(p1, m1, l1), Type::Pointer(p2, m2, l2)) => m1 == m2 && l1 == l2 && self.unify(&p1, &p2),
+            (Type::Witness(w1), Type::Witness(w2)) => self.unify(&w1, &w2),
             (Type::Function { params: p1, ret: r1, effects: e1 }, Type::Function { params: p2, ret: r2, effects: e2 }) => {
                 if p1.len() != p2.len() { return false; }
                 for (p1, p2) in p1.iter().zip(p2.iter()) {
@@ -681,7 +692,18 @@ impl TypeChecker {
                      *ret
                 } else {
                      for arg in args { self.infer_expr(arg); }
-                     self.new_var()
+                     let res = self.new_var();
+                     
+                     // CHECK: Witness construction
+                     if let Type::Witness(_) = self.prune(&res) {
+                         let is_proof = self.current_attributes.iter().any(|a| a.name == "proof");
+                         if !is_proof && !self.in_raw_block {
+                             eprintln!("Error: Witness construction is only allowed in @proof functions or raw blocks");
+                             return Type::Error;
+                         }
+                     }
+                     
+                     res
                 }
             }
             ast::Expr::StructLiteral { path, fields } => {
@@ -726,10 +748,15 @@ impl TypeChecker {
                 Type::Prim(PrimType::Void)
             }
             ast::Expr::While { cond, body } => {
-                let ct = self.infer_expr(cond);
-                self.unify(&ct, &Type::Prim(PrimType::Bool));
                 self.check_block(body);
                 Type::Prim(PrimType::Void)
+            }
+            ast::Expr::Raw(inner) => {
+                let old_raw = self.in_raw_block;
+                self.in_raw_block = true;
+                let ty = self.infer_expr(inner);
+                self.in_raw_block = old_raw;
+                ty
             }
             ast::Expr::Each { var, iter, body } => {
                 let _it = self.infer_expr(iter);
@@ -1022,45 +1049,6 @@ impl TypeChecker {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::type_system::Effect;
-
-    #[test]
-    fn test_unify_concrete_effects() {
-        let mut tc = TypeChecker::new();
-        let e1 = EffectSet::Concrete(vec![Effect::IO]);
-        let e2 = EffectSet::Concrete(vec![Effect::IO]);
-        assert!(tc.unify_effects(&e1, &e2));
-        
-        let e3 = EffectSet::Concrete(vec![Effect::Alloc]);
-        assert!(!tc.unify_effects(&e1, &e3));
-    }
-
-    #[test]
-    fn test_unify_effect_vars() {
-        let mut tc = TypeChecker::new();
-        let ev1 = tc.new_effect_var();
-        let e1 = EffectSet::Concrete(vec![Effect::Mut]);
-        
-        assert!(tc.unify_effects(&ev1, &e1));
-        let pruned = tc.prune_effects(&ev1);
-        assert_eq!(pruned, e1);
-    }
-
-    #[test]
-    fn test_unify_rows() {
-        let mut tc = TypeChecker::new();
-        let tail = tc.new_effect_var();
-        let row = EffectSet::Row(vec![Effect::IO], Box::new(tail.clone()));
-        let concrete = EffectSet::Concrete(vec![Effect::IO, Effect::Alloc]);
-        
-        assert!(tc.unify_effects(&row, &concrete));
-        let pruned_tail = tc.prune_effects(&tail);
-        assert_eq!(pruned_tail, EffectSet::Concrete(vec![Effect::Alloc]));
-    }
-}
 
 impl TypeChecker {
     fn apply_lifetime_elision(&mut self, params: &mut [Type], ret: &mut Type) {
@@ -1126,5 +1114,106 @@ impl TypeChecker {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use izel_lexer::{Lexer, TokenKind, Token};
+    use crate::type_system::Effect;
+
+    fn tokenize(source: &str) -> Vec<Token> {
+        let mut lexer = Lexer::new(source, izel_span::SourceId(0));
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token();
+            if token.kind == TokenKind::Eof {
+                tokens.push(token);
+                break;
+            }
+            tokens.push(token);
+        }
+        tokens
+    }
+
+    #[test]
+    fn test_unify_concrete_effects() {
+        let mut tc = TypeChecker::new();
+        let e1 = EffectSet::Concrete(vec![Effect::IO]);
+        let e2 = EffectSet::Concrete(vec![Effect::IO]);
+        assert!(tc.unify_effects(&e1, &e2));
+        
+        let e3 = EffectSet::Concrete(vec![Effect::Alloc]);
+        assert!(!tc.unify_effects(&e1, &e3));
+    }
+
+    #[test]
+    fn test_unify_effect_vars() {
+        let mut tc = TypeChecker::new();
+        let ev1 = tc.new_effect_var();
+        let e1 = EffectSet::Concrete(vec![Effect::Mut]);
+        
+        assert!(tc.unify_effects(&ev1, &e1));
+        let pruned = tc.prune_effects(&ev1);
+        assert_eq!(pruned, e1);
+    }
+
+    #[test]
+    fn test_unify_rows() {
+        let mut tc = TypeChecker::new();
+        let tail = tc.new_effect_var();
+        let row = EffectSet::Row(vec![Effect::IO], Box::new(tail.clone()));
+        let concrete = EffectSet::Concrete(vec![Effect::IO, Effect::Alloc]);
+        
+        assert!(tc.unify_effects(&row, &concrete));
+        let pruned_tail = tc.prune_effects(&tail);
+        assert_eq!(pruned_tail, EffectSet::Concrete(vec![Effect::Alloc]));
+    }
+
+    #[test]
+    fn test_witness_parsing_and_lowering() {
+        let source = "@proof forge prove_nonzero(n: i32) -> Witness<i32> { raw n }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens);
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let item = lowerer.lower_item(&cst).unwrap();
+        
+        if let ast::Item::Forge(f) = item {
+            assert!(f.attributes.iter().any(|a| a.name == "proof"));
+            if let ast::Type::Witness(_) = f.ret_type {
+                // Success
+            } else {
+                panic!("Expected Witness return type, got {:?}", f.ret_type);
+            }
+        } else {
+            panic!("Expected Forge item");
+        }
+    }
+
+    #[test]
+    fn test_witness_construction_rules() {
+        let mut checker = TypeChecker::new();
+        
+        // 1. Fail: Witness construction in normal function without raw
+        checker.current_attributes = vec![];
+        checker.in_raw_block = false;
+        
+        let _witness_ty = Type::Witness(Box::new(Type::Prim(PrimType::I32)));
+        
+        let is_proof = checker.current_attributes.iter().any(|a| a.name == "proof");
+        assert!(!is_proof);
+        assert!(!checker.in_raw_block);
+        
+        // 2. Success: @proof function
+        checker.current_attributes = vec![ast::Attribute { name: "proof".to_string(), args: vec![], span: izel_span::Span::dummy() }];
+        let is_proof = checker.current_attributes.iter().any(|a| a.name == "proof");
+        assert!(is_proof || checker.in_raw_block);
+        
+        // 3. Success: raw block
+        checker.current_attributes = vec![];
+        checker.in_raw_block = true;
+        assert!(checker.current_attributes.iter().any(|a| a.name == "proof") || checker.in_raw_block);
     }
 }

@@ -36,6 +36,9 @@ pub enum Type {
     /// Associated type (e.g. Iterator::Item)
     Assoc(Box<Type>, String),
     
+    /// Witness types (Witness<P>)
+    Witness(Box<Type>),
+    
     /// Error sentinel
     Error,
 }

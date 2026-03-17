@@ -331,6 +331,8 @@ name = "izel_typeck"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "izel_ast_lower",
+ "izel_lexer",
  "izel_parser",
  "izel_resolve",
  "izel_span",
