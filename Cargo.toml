@@ -40,3 +40,17 @@ petgraph = "0.6"
 string-interner = "0.17"
 smallvec = "1.11"
 bumpalo = "3.14"
+
+# Internal Crates
+izel_span = { path = "crates/izel_span" }
+izel_parser = { path = "crates/izel_parser" }
+izel_diagnostics = { path = "crates/izel_diagnostics" }
+izel_resolve = { path = "crates/izel_resolve" }
+izel_lexer = { path = "crates/izel_lexer" }
+izel_ast_lower = { path = "crates/izel_ast_lower" }
+izel_typeck = { path = "crates/izel_typeck" }
+izel_mir = { path = "crates/izel_mir" }
+izel_codegen = { path = "crates/izel_codegen" }
+izel_driver = { path = "crates/izel_driver" }
+izel_session = { path = "crates/izel_session" }
+izel_borrow = { path = "crates/izel_borrow" }

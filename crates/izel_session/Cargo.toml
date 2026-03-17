@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-izel_span = { path = "../izel_span" }
-izel_diagnostics = { path = "../izel_diagnostics" }
+izel_span = { workspace = true }
+izel_diagnostics = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true, optional = true }
 

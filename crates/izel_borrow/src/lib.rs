@@ -1,7 +1,7 @@
 //! Ownership and Borrow Checking for Izel.
 
-use izel_mir::{MirBody, Local, Instruction, Terminator, Operand, Place, Rvalue};
-use izel_typeck::Type;
+use izel_mir::*;
+use izel_typeck::type_system::Type;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub struct BorrowChecker {

@@ -7,9 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-izel_span = { path = "../izel_span" }
-izel_parser = { path = "../izel_parser" }
-izel_lexer = { path = "../izel_lexer" }
+izel_span = { workspace = true }
+izel_parser = { workspace = true }
+izel_lexer = { workspace = true }
 rustc-hash = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }

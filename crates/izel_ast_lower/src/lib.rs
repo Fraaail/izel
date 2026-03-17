@@ -79,6 +79,16 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        for attr in &attributes {
+            if attr.name == "requires" {
+                requires.extend(attr.args.clone());
+            } else if attr.name == "ensures" {
+                ensures.extend(attr.args.clone());
+            }
+        }
+
         ast::Forge {
             name,
             generic_params,
@@ -86,6 +96,8 @@ impl<'a> Lowerer<'a> {
             ret_type,
             effects,
             attributes,
+            requires,
+            ensures,
             body,
             span: node.span(),
         }

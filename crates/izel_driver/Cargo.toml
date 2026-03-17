@@ -7,16 +7,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-izel_span = { path = "../izel_span" }
-izel_session = { path = "../izel_session" }
-izel_lexer = { path = "../izel_lexer" }
-izel_parser = { path = "../izel_parser" }
-izel_ast_lower = { path = "../izel_ast_lower" }
-izel_codegen = { path = "../izel_codegen" }
-izel_mir = { path = "../izel_mir" }
-izel_resolve = { path = "../izel_resolve" }
-izel_typeck = { path = "../izel_typeck" }
-izel_diagnostics = { path = "../izel_diagnostics" }
+izel_span = { workspace = true }
+izel_session = { workspace = true }
+izel_lexer = { workspace = true }
+izel_parser = { workspace = true }
+izel_ast_lower = { workspace = true }
+izel_codegen = { workspace = true }
+izel_mir = { workspace = true }
+izel_resolve = { workspace = true }
+izel_typeck = { workspace = true }
+izel_diagnostics = { workspace = true }
 inkwell = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

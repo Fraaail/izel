@@ -1,6 +1,8 @@
 pub mod cst;
 pub mod ast;
 pub mod expr;
+pub mod eval;
+pub mod contracts;
 
 use izel_lexer::{Token, TokenKind};
 use crate::cst::{NodeKind, SyntaxElement, SyntaxNode};

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-izel_parser = { path = "../izel_parser" }
-izel_lexer = { path = "../izel_lexer" }
-izel_span = { path = "../izel_span" }
-rustc-hash = "1.1.0"
+izel_parser = { workspace = true }
+izel_lexer = { workspace = true }
+izel_span = { workspace = true }
+rustc-hash = { workspace = true }

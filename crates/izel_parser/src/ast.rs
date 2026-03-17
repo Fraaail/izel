@@ -32,6 +32,8 @@ pub struct Forge {
     pub ret_type: Type,
     pub effects: Vec<String>,
     pub attributes: Vec<Attribute>,
+    pub requires: Vec<Expr>,
+    pub ensures: Vec<Expr>,
     pub body: Option<Block>,
     pub span: Span,
 }

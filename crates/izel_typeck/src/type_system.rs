@@ -83,6 +83,8 @@ pub enum Effect {
     User(String),
 }
 
+use izel_parser::ast::Expr;
+
 #[derive(Debug, Clone)]
 pub struct Scheme {
     /// Anonymous inference variables to generalize
@@ -94,4 +96,7 @@ pub struct Scheme {
     /// Bounds for generic parameters: (param_name, weave_name)
     pub bounds: Vec<(String, String)>,
     pub ty: Type,
+    pub param_names: Vec<String>,
+    pub requires: Vec<Expr>,
+    pub ensures: Vec<Expr>,
 }
