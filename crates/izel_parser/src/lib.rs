@@ -365,8 +365,18 @@ impl Parser {
 
     fn parse_dual_after_keyword(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
         children.extend(self.eat_trivia().into_iter());
+        if self.current_kind() == TokenKind::Shape {
+            children.push(SyntaxElement::Token(self.bump())); // shape
+        }
+
+        children.extend(self.eat_trivia().into_iter());
         if self.is_naming_ident() {
             children.push(SyntaxElement::Token(self.bump())); // name
+        }
+
+        children.extend(self.eat_trivia().into_iter());
+        if self.current_kind() == TokenKind::Lt {
+            children.push(SyntaxElement::Node(self.parse_generic_params()));
         }
 
         children.extend(self.eat_trivia().into_iter());
@@ -891,5 +901,34 @@ impl Parser {
             }
         }
         SyntaxNode::new(NodeKind::Attribute, children)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use izel_lexer::Lexer;
+
+    fn parse_test(src: &str) -> SyntaxNode {
+        let mut lexer = Lexer::new(src, izel_span::SourceId(0));
+        let mut tokens = Vec::new();
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+        let mut parser = Parser::new(tokens);
+        parser.source = src.to_string();
+        parser.parse_decl()
+    }
+
+    #[test]
+    fn test_parse_dual_decl() {
+        let node = parse_test("dual shape JsonFormat<T> { forge encode(&self, val: &T) }");
+        assert_eq!(node.kind, NodeKind::DualDecl);
+        assert!(node.children.len() > 6); // dual, shape, name, generics, {, forge...
     }
 }

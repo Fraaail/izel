@@ -1,0 +1,15 @@
+draw std::io
+
+dual shape JsonFormat<T> {
+    forge encode(&self, val: &T) -> String {
+        "todo-encoded-json"
+    }
+}
+
+dual shape BinaryProtocol<T> {
+    forge write(&self, val: &T) -> void !io {
+        println("Writing binary data")
+    }
+}
+
+forge main() {}

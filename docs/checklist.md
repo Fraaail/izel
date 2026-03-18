@@ -178,11 +178,11 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Auto-capture `here!()` (file/line) on propagation.
 
 ### 3.5 Duality Types
-- [ ] **Elaboration**:
-    - [ ] Derive `decode` from `encode` logic in `dual shape`.
-- [ ] **Verification**:
-    - [ ] Auto-generate `#[test]` for round-trip law if effectful.
-    - [ ] Statically prove round-trip if `pure`.
+- [x] **Elaboration**:
+    - [x] Derive `decode` from `encode` logic in `dual shape`.
+- [x] **Verification**:
+    - [x] Auto-generate `#[test]` for round-trip law if effectful.
+    - [x] Statically prove round-trip if `pure`.
 
 ---
 

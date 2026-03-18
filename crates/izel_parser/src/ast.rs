@@ -18,6 +18,7 @@ pub enum Item {
     Shape(Shape),
     Scroll(Scroll),
     Weave(Weave),
+    Dual(Dual),
     Impl(Impl),
     Alias(Alias),
     Ward(Ward),
@@ -49,6 +50,15 @@ pub struct GenericParam {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Dual {
+    pub name: String,
+    pub generic_params: Vec<GenericParam>,
+    pub items: Vec<Item>,
+    pub attributes: Vec<Attribute>,
     pub span: Span,
 }
 
