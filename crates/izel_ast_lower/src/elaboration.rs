@@ -36,7 +36,8 @@ pub fn elaborate_dual(dual: &mut ast::Dual) -> Option<ast::Item> {
 fn generate_roundtrip_test(shape_name: &str, encode: &ast::Forge, _decode: &ast::Forge) -> ast::Item {
     let test_name = format!("test_{}_roundtrip", shape_name.to_lowercase());
     ast::Item::Forge(ast::Forge {
-        name: test_name,
+        name: format!("{}_test", shape_name),
+        is_flow: false,
         generic_params: encode.generic_params.clone(),
         params: vec![],
         ret_type: ast::Type::Prim("void".into()),
@@ -57,7 +58,8 @@ fn derive_decode_from_encode(encode: &ast::Forge) -> ast::Forge {
     
     // Simplistic inversion for proof of concept
     ast::Forge {
-        name: "decode".into(),
+        name: "decode".to_string(),
+        is_flow: false,
         generic_params: encode.generic_params.clone(),
         params,
         ret_type: ast::Type::Cascade(Box::new(ast::Type::Prim("T".into()))),
@@ -77,7 +79,8 @@ fn derive_encode_from_decode(decode: &ast::Forge) -> ast::Forge {
     params.push(ast::Param { name: "val".into(), ty: ast::Type::Pointer(Box::new(ast::Type::Prim("T".into())), false), span: decode.span });
     
     ast::Forge {
-        name: "encode".into(),
+        name: "encode".to_string(),
+        is_flow: false,
         generic_params: decode.generic_params.clone(),
         params,
         ret_type: ast::Type::Prim("JsonValue".into()),

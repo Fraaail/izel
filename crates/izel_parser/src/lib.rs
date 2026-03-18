@@ -47,7 +47,7 @@ impl Parser {
         // Handle modifiers (open/hidden/pure/sole/etc)
         while matches!(
             self.current_kind(),
-            TokenKind::Open | TokenKind::Hidden | TokenKind::Pure | TokenKind::Sole
+            TokenKind::Open | TokenKind::Hidden | TokenKind::Pure | TokenKind::Sole | TokenKind::Flow
         ) {
             children.push(SyntaxElement::Token(self.bump()));
             children.extend(self.eat_trivia().into_iter());

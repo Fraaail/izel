@@ -28,6 +28,7 @@ pub enum Item {
 #[derive(Debug, Clone)]
 pub struct Forge {
     pub name: String,
+    pub is_flow: bool,
     pub generic_params: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub ret_type: Type,
@@ -184,6 +185,7 @@ pub enum Expr {
         expr: Box<Expr>,
         context: Option<Box<Expr>>,
     },
+    Tide(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

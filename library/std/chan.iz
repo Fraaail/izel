@@ -1,0 +1,41 @@
+// library/std/chan.iz
+
+// Sender end of a channel
+shape Sender<T> {
+    // Internal handle/pointer to the channel state
+    handle: *mut void,
+}
+
+impl<T> Sender<T> {
+    // Sends a value into the channel. Blocks or suspends until the receiver is ready (if bounded/synchronous).
+    // In an asynchronous context, this should ideally be non-blocking or a suspend point (i.e. returning a Flow).
+    // For now, we represent the basic primitive.
+    open forge send(val: T) -> Result<void, ()> {
+        // Implementation provided by runtime/compiler intrinsics
+        Result::Ok(())
+    }
+}
+
+// Receiver end of a channel
+shape Receiver<T> {
+    // Internal handle/pointer to the channel state
+    handle: *mut void,
+}
+
+impl<T> Receiver<T> {
+    // Receives a value from the channel.
+    // Suspends the current execution until a value is available.
+    // In Izel, blocking operations are expected to be marked as `flow`, so the caller must `tide` them.
+    open flow forge recv() -> Result<T, ()> {
+        // Implementation provided by runtime/compiler intrinsics
+        Result::Err(()) // Placeholder
+    }
+}
+
+// Creates a new asynchronous channel, returning the Sender and Receiver halves.
+open forge new<T>() -> (Sender<T>, Receiver<T>) {
+    (
+        Sender { handle: std::ptr::null_mut() as *mut void },
+        Receiver { handle: std::ptr::null_mut() as *mut void }
+    )
+}

@@ -182,6 +182,7 @@ impl Parser {
             | TokenKind::Not
             | TokenKind::Tilde
             | TokenKind::Star
+            | TokenKind::Tide
             | TokenKind::Ampersand
             | TokenKind::AmpersandTilde => {
                 children.push(SyntaxElement::Token(self.bump()));

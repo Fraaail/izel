@@ -196,9 +196,9 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 - [x] **`std::iter`**: Full pipeline suite (`map`, `filter`, `fold`, `take`, etc.).
 - [x] **`std::collections`**:
     - [x] `Vec<T>`, `HashMap<K, V>`, `BTreeMap<K, V>`.
-- [ ] **Async Native**:
-    - [ ] Implement `flow` tasks and `tide` executors.
-    - [ ] Channel implementation (`std::chan`).
+- [x] **Async Native**:
+    - [x] Implement `flow` tasks and `tide` executors.
+    - [x] Channel implementation (`std::chan`).
 
 ---
 

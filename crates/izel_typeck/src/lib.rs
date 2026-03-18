@@ -32,6 +32,7 @@ pub struct TypeChecker {
     pub shape_invariants: FxHashMap<String, Vec<ast::Expr>>,
     pub method_env: FxHashMap<String, FxHashMap<String, Scheme>>,
     pub current_self: Option<Type>,
+    pub in_flow_context: bool,
 }
 
 impl TypeChecker {
@@ -57,6 +58,7 @@ impl TypeChecker {
             shape_invariants: FxHashMap::default(),
             method_env: FxHashMap::default(),
             current_self: None,
+            in_flow_context: false,
         }
     }
 
@@ -195,6 +197,8 @@ impl TypeChecker {
 
     fn check_forge(&mut self, f: &ast::Forge) {
         self.push_scope();
+        let old_flow = self.in_flow_context;
+        self.in_flow_context = f.is_flow;
 
         // Define generic parameters in scope
         for gp in &f.generic_params {
@@ -253,6 +257,7 @@ impl TypeChecker {
 
         self.current_attributes = old_attrs;
         self.expected_ret = old_ret;
+        self.in_flow_context = old_flow;
         self.pop_scope();
     }
 
@@ -971,6 +976,15 @@ impl TypeChecker {
                         lt
                     }
                 }
+            }
+            ast::Expr::Tide(inner) => {
+                if !self.in_flow_context {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error()
+                            .with_message("`tide` operator is only allowed inside `flow forge` declarations")
+                    );
+                }
+                self.infer_expr(inner)
             }
             ast::Expr::Unary(op, inner) => {
                 let it = self.infer_expr(inner);

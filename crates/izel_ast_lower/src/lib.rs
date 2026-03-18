@@ -50,6 +50,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_forge(&self, node: &SyntaxNode) -> ast::Forge {
         let mut name = String::new();
+        let mut is_flow = false;
         let mut params = Vec::new();
         let mut ret_type = ast::Type::Prim("void".to_string());
         let mut body = None;
@@ -62,6 +63,9 @@ impl<'a> Lowerer<'a> {
             match child {
                 SyntaxElement::Node(n) if n.kind == NodeKind::Attributes => {
                     attributes = self.lower_attributes(n);
+                }
+                SyntaxElement::Token(token) if token.kind == TokenKind::Flow => {
+                    is_flow = true;
                 }
                 SyntaxElement::Token(token) if self.is_naming_ident(token.kind) => {
                     name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
@@ -101,6 +105,7 @@ impl<'a> Lowerer<'a> {
 
         ast::Forge {
             name,
+            is_flow,
             generic_params,
             params,
             ret_type,
@@ -516,29 +521,40 @@ impl<'a> Lowerer<'a> {
             }
             NodeKind::UnaryExpr => {
                 let mut op = ast::UnaryOp::Neg;
+                let mut is_tide = false;
                 let mut expr = None;
                 for child in &node.children {
                      match child {
                           SyntaxElement::Token(t) => {
-                               op = match t.kind {
-                                    TokenKind::Minus => ast::UnaryOp::Neg,
-                                    TokenKind::Not => ast::UnaryOp::Not,
-                                    TokenKind::Tilde => ast::UnaryOp::BitNot,
-                                    TokenKind::Star => ast::UnaryOp::Deref,
-                                    TokenKind::Ampersand => ast::UnaryOp::Ref(false),
-                                    TokenKind::AmpersandTilde => ast::UnaryOp::Ref(true),
-                                    _ => ast::UnaryOp::Neg,
-                               };
+                               if t.kind == TokenKind::Tide {
+                                   is_tide = true;
+                               } else {
+                                   op = match t.kind {
+                                        TokenKind::Minus => ast::UnaryOp::Neg,
+                                        TokenKind::Not => ast::UnaryOp::Not,
+                                        TokenKind::Tilde => ast::UnaryOp::BitNot,
+                                        TokenKind::Star => ast::UnaryOp::Deref,
+                                        TokenKind::Ampersand => ast::UnaryOp::Ref(false),
+                                        TokenKind::AmpersandTilde => ast::UnaryOp::Ref(true),
+                                        _ => ast::UnaryOp::Neg,
+                                   };
+                               }
                           }
                           SyntaxElement::Node(n) => expr = Some(self.lower_expr(n)),
                      }
                 }
-                ast::Expr::Unary(op, Box::new(expr.unwrap_or(ast::Expr::Literal(ast::Literal::Nil))))
+                let inner = Box::new(expr.unwrap_or(ast::Expr::Literal(ast::Literal::Nil)));
+                if is_tide {
+                    ast::Expr::Tide(inner)
+                } else {
+                    ast::Expr::Unary(op, inner)
+                }
             }
             NodeKind::CallExpr => {
                  let target = self.lower_element(&node.children[0]);
                  let mut args = Vec::new();
-                 for i in 1..node.children.len() {
+                 // Skip target and parenthesis
+                 for i in 2..node.children.len() {
                       if let SyntaxElement::Node(n) = &node.children[i] {
                            args.push(self.lower_expr(n));
                       }

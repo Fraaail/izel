@@ -41,6 +41,13 @@ fn main() -> Result<()> {
     let mut typeck = izel_typeck::TypeChecker::new();
     typeck.check_ast(&_ast);
 
+    if !typeck.diagnostics.is_empty() {
+        for diag in &typeck.diagnostics {
+            eprintln!("Type Error: {}", diag.message);
+        }
+        std::process::exit(1);
+    }
+
     println!("Borrow checking...");
     let mut mir_lowerer = izel_mir::lower::MirLowerer::new();
     mir_lowerer.check_contracts = session.options.check_contracts;
