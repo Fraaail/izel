@@ -72,6 +72,8 @@ pub enum EffectSet {
     Var(usize),
     /// A row of effects + a tail (row poly)
     Row(Vec<Effect>, Box<EffectSet>),
+    /// A named effect parameter (for generic effects)
+    Param(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -19,10 +19,36 @@ impl MirLowerer {
         }
     }
 
+    fn lower_type(&self, ty: &ast::Type) -> Type {
+        match ty {
+            ast::Type::Prim(name) => Type::Prim(self.map_prim(name)),
+            ast::Type::Pointer(inner, is_mut) => Type::Pointer(Box::new(self.lower_type(inner)), *is_mut, izel_typeck::type_system::Lifetime::Anonymous(0)),
+            ast::Type::Optional(inner) => Type::Optional(Box::new(self.lower_type(inner))),
+            _ => Type::Error,
+        }
+    }
+
+    fn map_prim(&self, name: &str) -> izel_typeck::type_system::PrimType {
+        match name {
+            "i32" => izel_typeck::type_system::PrimType::I32,
+            "f64" => izel_typeck::type_system::PrimType::F64,
+            "bool" => izel_typeck::type_system::PrimType::Bool,
+            "str" => izel_typeck::type_system::PrimType::Str,
+            _ => izel_typeck::type_system::PrimType::I32,
+        }
+    }
+
     pub fn lower_forge(&mut self, forge: &ast::Forge) -> MirBody {
-        // In a real compiler, forge would already have types.
-        // For now we'll assume they are available or we lower from typed AST.
+        self.scopes.last_mut().unwrap().clear();
         
+        // Lower parameters
+        for param in &forge.params {
+            let local = Local(self.body.locals.len());
+            let ty = self.lower_type(&param.ty);
+            self.body.locals.push(LocalData { name: param.name.clone(), ty });
+            self.scopes.last_mut().unwrap().insert(param.name.clone(), local);
+        }
+
         if let Some(body) = &forge.body {
             self.lower_block(body);
         }
@@ -48,14 +74,14 @@ impl MirLowerer {
 
     fn lower_stmt(&mut self, stmt: &ast::Stmt) {
         match stmt {
-            ast::Stmt::Let { name, ty: _, init, .. } => {
+            ast::Stmt::Let { name, ty, init, .. } => {
+                let local = Local(self.body.locals.len());
+                let mir_ty = if let Some(t) = ty { self.lower_type(t) } else { Type::Error };
+                self.body.locals.push(LocalData { name: name.clone(), ty: mir_ty });
+                self.scopes.last_mut().unwrap().insert(name.clone(), local);
+
                 if let Some(val_expr) = init {
                     let rvalue = self.lower_expr(val_expr);
-                    let local = Local(self.body.locals.len());
-                    // Dummy type for now, should come from TAST
-                    self.body.locals.push(LocalData { name: name.clone(), ty: Type::Error });
-                    self.scopes.last_mut().unwrap().insert(name.clone(), local);
-                    
                     let instr = Instruction::Assign(Place { local }, rvalue);
                     self.body.blocks.node_weight_mut(self.current_block).unwrap().instructions.push(instr);
                 }
@@ -63,7 +89,6 @@ impl MirLowerer {
             ast::Stmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
-            _ => {}
         }
     }
 
@@ -83,7 +108,7 @@ impl MirLowerer {
                 for scope in self.scopes.iter().rev() {
                     if let Some(&local) = scope.get(name) {
                         // In ownership logic, we'd decide Copy vs Move here
-                        return Rvalue::Use(Operand::Copy(Place { local }));
+                        return Rvalue::Use(Operand::Move(Place { local }));
                     }
                 }
                 Rvalue::Use(Operand::Constant(Constant::Int(0)))
@@ -125,6 +150,80 @@ impl MirLowerer {
                 };
                 Rvalue::BinaryOp(mir_op, l_op, r_op)
             }
+            ast::Expr::Call(callee, args) => {
+                let callee_name = if let ast::Expr::Ident(name, _) = &**callee {
+                    name.clone()
+                } else {
+                    "unknown".to_string()
+                };
+                let mut operands = Vec::new();
+                for arg in args {
+                    let rv = self.lower_expr(arg);
+                    operands.push(self.rvalue_to_operand(rv));
+                }
+                let local = Local(self.body.locals.len());
+                self.body.locals.push(LocalData { name: format!("call_tmp{}", local.0), ty: Type::Error });
+                let instr = Instruction::Call(Place { local }, callee_name, operands);
+                self.body.blocks.node_weight_mut(self.current_block).unwrap().instructions.push(instr);
+                Rvalue::Use(Operand::Move(Place { local }))
+            }
+            ast::Expr::Given { cond, then_block, else_expr } => {
+                let cond_rv = self.lower_expr(cond);
+                let cond_op = self.rvalue_to_operand(cond_rv);
+                
+                let then_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let else_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let join_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                
+                self.body.blocks.add_edge(self.current_block, then_id, ControlFlow::Conditional(true));
+                self.body.blocks.add_edge(self.current_block, else_id, ControlFlow::Conditional(false));
+                
+                self.body.blocks.node_weight_mut(self.current_block).unwrap().terminator = Some(Terminator::SwitchInt(cond_op, vec![(1, then_id)], else_id));
+                
+                // Then branch
+                self.current_block = then_id;
+                self.lower_block(then_block);
+                if self.body.blocks[self.current_block].terminator.is_none() {
+                    self.body.blocks.add_edge(self.current_block, join_id, ControlFlow::Unconditional);
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(join_id));
+                }
+
+                // Else branch
+                self.current_block = else_id;
+                if let Some(el) = else_expr {
+                    self.lower_expr(el);
+                }
+                if self.body.blocks[self.current_block].terminator.is_none() {
+                    self.body.blocks.add_edge(self.current_block, join_id, ControlFlow::Unconditional);
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(join_id));
+                }
+
+                self.current_block = join_id;
+                Rvalue::Use(Operand::Constant(Constant::Int(0))) // Dummy
+            }
+            ast::Expr::While { cond, body } => {
+                let cond_head = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let body_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let exit_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                
+                self.body.blocks.add_edge(self.current_block, cond_head, ControlFlow::Unconditional);
+                self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(cond_head));
+                
+                self.current_block = cond_head;
+                let cond_rv = self.lower_expr(cond);
+                let cond_op = self.rvalue_to_operand(cond_rv);
+                self.body.blocks.add_edge(cond_head, body_id, ControlFlow::Conditional(true));
+                self.body.blocks.add_edge(cond_head, exit_id, ControlFlow::Conditional(false));
+                self.body.blocks[cond_head].terminator = Some(Terminator::SwitchInt(cond_op, vec![(1, body_id)], exit_id));
+                
+                self.current_block = body_id;
+                self.lower_block(body);
+                self.body.blocks.add_edge(self.current_block, cond_head, ControlFlow::Unconditional);
+                self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(cond_head));
+                
+                self.current_block = exit_id;
+                Rvalue::Use(Operand::Constant(Constant::Int(0)))
+            }
             _ => Rvalue::Use(Operand::Constant(Constant::Int(0))),
         }
     }
@@ -149,33 +248,83 @@ impl MirLowerer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use izel_lexer::Lexer;
-    use izel_parser::Parser;
     use izel_span::SourceId;
+    use izel_parser::ast;
 
     #[test]
     fn test_lower_let_add() {
-        let source = "forge main() { let x = 1 + 2; }";
-        let mut lexer = Lexer::new(source, SourceId(0));
-        let mut tokens = Vec::new();
-        loop {
-            let t = lexer.next_token();
-            tokens.push(t.clone());
-            if t.kind == TokenKind::Eof { break; }
-        }
+        let mut forge = ast::Forge {
+            name: "main".into(),
+            generic_params: vec![],
+            params: vec![],
+            ret_type: ast::Type::Prim("i32".into()),
+            effects: vec![],
+            attributes: vec![],
+            requires: vec![],
+            ensures: vec![],
+            body: Some(ast::Block {
+                stmts: vec![
+                    ast::Stmt::Let {
+                        name: "x".into(),
+                        ty: Some(ast::Type::Prim("i32".into())),
+                        init: Some(ast::Expr::Binary(
+                            ast::BinaryOp::Add,
+                            Box::new(ast::Expr::Literal(ast::Literal::Int(1))),
+                            Box::new(ast::Expr::Literal(ast::Literal::Int(2))),
+                        )),
+                        span: izel_span::Span::dummy(),
+                    }
+                ],
+                expr: None,
+                span: izel_span::Span::dummy(),
+            }),
+            span: izel_span::Span::dummy(),
+        };
         
-        let mut parser = Parser::new(tokens);
-        let cst = parser.parse_decl();
-        
-        let mut lowerer = MirLowerer::new(source);
-        let mir = lowerer.lower_forge(&cst);
+        let mut lowerer = MirLowerer::new();
+        let mir = lowerer.lower_forge(&mut forge);
 
-        // x is local 0
         assert_eq!(mir.locals.len(), 1);
         assert_eq!(mir.locals[0].name, "x");
         
         let block = mir.blocks.node_weight(mir.entry).unwrap();
-        // [Assign(x, BinaryOp(Add, 1, 2))]
         assert_eq!(block.instructions.len(), 1);
+    }
+
+    #[test]
+    fn test_lower_given() {
+        let mut forge = ast::Forge {
+            name: "test_if".into(),
+            generic_params: vec![],
+            params: vec![],
+            ret_type: ast::Type::Prim("i32".into()),
+            effects: vec![],
+            attributes: vec![],
+            requires: vec![],
+            ensures: vec![],
+            body: Some(ast::Block {
+                stmts: vec![
+                    ast::Stmt::Expr(ast::Expr::Given {
+                        cond: Box::new(ast::Expr::Literal(ast::Literal::Bool(true))),
+                        then_block: ast::Block {
+                            stmts: vec![],
+                            expr: Some(Box::new(ast::Expr::Literal(ast::Literal::Int(1)))),
+                            span: izel_span::Span::dummy(),
+                        },
+                        else_expr: Some(Box::new(ast::Expr::Literal(ast::Literal::Int(2)))),
+                    })
+                ],
+                expr: None,
+                span: izel_span::Span::dummy(),
+            }),
+            span: izel_span::Span::dummy(),
+        };
+
+        let mut lowerer = MirLowerer::new();
+        let mir = lowerer.lower_forge(&mut forge);
+        
+        // Entry block -> Switch -> (Then block | Else block) -> Join block
+        // entry + then + else + join = 4 nodes.
+        assert_eq!(mir.blocks.node_count(), 4);
     }
 }

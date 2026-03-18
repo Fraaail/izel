@@ -1,0 +1,11 @@
+forge logger() !io {
+    // simulates an IO effect
+}
+
+forge caller_pure() !pure {
+    logger()
+}
+
+forge main() {
+    caller_no_io()
+}

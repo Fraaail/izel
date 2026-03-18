@@ -168,7 +168,7 @@ impl TypeChecker {
              if let Some(sig) = self.resolve_name(&f.name) {
                  if let Type::Function { effects: declared, .. } = self.prune(&sig) {
                      if !self.unify_effects(&collected, &declared) {
-                         // TODO: Proper diagnostic
+                         eprintln!("Error: Function has effects {:?} but only declared {:?}", collected, declared);
                      }
                  }
              }
@@ -569,6 +569,55 @@ impl TypeChecker {
                 let remaining: Vec<_> = v.iter().filter(|e| !vals.contains(e)).cloned().collect();
                 self.unify_effects(tail, &EffectSet::Concrete(remaining))
             }
+            (EffectSet::Param(p1), EffectSet::Param(p2)) => p1 == p2,
+            _ => false,
+        }
+    }
+
+    pub fn accumulate_effects(&mut self, current: &EffectSet, new: &EffectSet) {
+        let current_pruned = self.prune_effects(current);
+        let new_pruned = self.prune_effects(new);
+        
+        match new_pruned {
+            EffectSet::Concrete(v) => {
+                for e in v {
+                    self.add_single_effect(&current_pruned, e);
+                }
+            }
+            EffectSet::Row(vals, tail) => {
+                for e in vals {
+                    self.add_single_effect(&current_pruned, e);
+                }
+                self.accumulate_effects(&current_pruned, &tail);
+            }
+            EffectSet::Var(_) | EffectSet::Param(_) => {
+                // For variables or parameters, we unify to ensure the current set covers them
+                self.unify_effects(&current_pruned, &new_pruned);
+            }
+        }
+    }
+
+    fn add_single_effect(&mut self, current: &EffectSet, e: Effect) {
+        let current = self.prune_effects(current);
+        match current {
+            EffectSet::Var(id) => {
+                let next_tail = self.new_effect_var();
+                self.bind_effect_var(id, EffectSet::Row(vec![e], Box::new(next_tail)));
+            }
+            EffectSet::Row(vals, tail) => {
+                if !vals.contains(&e) {
+                    self.add_single_effect(&tail, e);
+                }
+            }
+            EffectSet::Concrete(v) => {
+                if !v.contains(&e) {
+                    // TODO: This should probably be a diagnostic if we're checking against a signature
+                    // For now, we just don't add it if it's not allowed
+                }
+            }
+            EffectSet::Param(_) => {
+                // Cannot add to a fixed parameter
+            }
         }
     }
 
@@ -747,7 +796,7 @@ impl TypeChecker {
                 if let Type::Function { params, ret, effects } = self.prune(&ct) {
                      let current = self.current_effects.last().cloned();
                      if let Some(curr) = current {
-                         self.unify_effects(&curr, &effects);
+                         self.accumulate_effects(&curr, &effects);
                      }
                      for (arg, pty) in args.iter().zip(params.iter()) {
                           let at = self.infer_expr(arg);

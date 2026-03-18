@@ -110,7 +110,7 @@ impl Parser {
                 }
                 SyntaxNode::new(NodeKind::ParenExpr, children)
             }
-            TokenKind::Minus | TokenKind::Not | TokenKind::Tilde | TokenKind::Star | TokenKind::Ampersand => {
+            TokenKind::Minus | TokenKind::Not | TokenKind::Tilde | TokenKind::Star | TokenKind::Ampersand | TokenKind::AmpersandTilde => {
                 children.push(SyntaxElement::Token(self.bump()));
                 children.push(SyntaxElement::Node(self.parse_expr(Precedence::Unary)));
                 SyntaxNode::new(NodeKind::UnaryExpr, children)

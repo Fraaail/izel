@@ -14,6 +14,7 @@ izel_parser = { workspace = true }
 izel_ast_lower = { workspace = true }
 izel_codegen = { workspace = true }
 izel_mir = { workspace = true }
+izel_borrow = { workspace = true }
 izel_resolve = { workspace = true }
 izel_typeck = { workspace = true }
 izel_diagnostics = { workspace = true }

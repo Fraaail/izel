@@ -41,6 +41,21 @@ fn main() -> Result<()> {
     let mut typeck = izel_typeck::TypeChecker::new();
     typeck.check_ast(&_ast);
 
+    println!("Borrow checking...");
+    let mut mir_lowerer = izel_mir::lower::MirLowerer::new();
+    let mut borrow_checker = izel_borrow::BorrowChecker::new();
+    
+    for item in &_ast.items {
+        if let izel_parser::ast::Item::Forge(f) = item {
+            let mir = mir_lowerer.lower_forge(f);
+            if let Err(errors) = borrow_checker.check(&mir) {
+                for err in errors {
+                    eprintln!("Borrow Check Error in '{}': {}", f.name, err);
+                }
+            }
+        }
+    }
+
     println!("Generating LLVM IR...");
     let context = inkwell::context::Context::create();
     let mut codegen = izel_codegen::Codegen::new(&context, "main", &source);

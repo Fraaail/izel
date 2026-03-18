@@ -92,6 +92,7 @@ pub enum TokenKind {
     Percent,        // %
     Caret,          // ^
     Ampersand,      // &
+    AmpersandTilde, // &~
     Lt,             // <
     Gt,             // >
     Le,             // <=

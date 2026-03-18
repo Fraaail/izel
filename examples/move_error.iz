@@ -1,0 +1,6 @@
+forge main() {
+    let x = 10;
+    let px: &~i32 = &~x; // px is a mutable reference (non-copyable)
+    let y = px; // moves px into y
+    let z = px; // ERROR: use of moved variable px
+}

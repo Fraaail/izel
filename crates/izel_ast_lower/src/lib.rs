@@ -433,6 +433,7 @@ impl<'a> Lowerer<'a> {
                                     TokenKind::Tilde => ast::UnaryOp::BitNot,
                                     TokenKind::Star => ast::UnaryOp::Deref,
                                     TokenKind::Ampersand => ast::UnaryOp::Ref(false),
+                                    TokenKind::AmpersandTilde => ast::UnaryOp::Ref(true),
                                     TokenKind::Bang => {
                                          // Postfix !
                                          let inner = self.lower_element(&node.children[0]);

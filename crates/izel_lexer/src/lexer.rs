@@ -127,7 +127,14 @@ impl<'a> Lexer<'a> {
             '/' => TokenKind::Slash,
             '%' => TokenKind::Percent,
             '^' => TokenKind::Caret,
-            '&' => TokenKind::Ampersand,
+            '&' => {
+                if self.cursor.first() == '~' {
+                    self.cursor.bump();
+                    TokenKind::AmpersandTilde
+                } else {
+                    TokenKind::Ampersand
+                }
+            }
             '<' => {
                 if self.cursor.first() == '=' {
                     self.cursor.bump();
