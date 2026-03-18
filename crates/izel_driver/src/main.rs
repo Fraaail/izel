@@ -10,7 +10,30 @@ fn main() -> Result<()> {
     println!("Creator: @VoxDroid <izeno.contact@gmail.com>");
     println!("Repository: https://github.com/VoxDroid/izel\n");
 
-    let source = std::fs::read_to_string(&session.options.input)?;
+    if let Some(cmd) = &session.options.command {
+        match cmd {
+            izel_session::Command::Fmt { input } => {
+                let source = std::fs::read_to_string(input)?;
+                let formatted = izel_fmt::format_source(&source);
+                println!("{}", formatted);
+                return Ok(());
+            }
+            izel_session::Command::Lsp => {
+                izel_lsp::run_server_sync();
+                return Ok(());
+            }
+            izel_session::Command::Deps { manifest_path } => {
+                let toml_str = std::fs::read_to_string(manifest_path)?;
+                let manifest = izel_pm::parse_manifest(&toml_str).map_err(|e| anyhow::anyhow!(e))?;
+                println!("Loaded manifest for package: {} v{}", manifest.package.name, manifest.package.version);
+                izel_pm::resolve_dependencies(&manifest.dependencies).map_err(|e| anyhow::anyhow!(e))?;
+                return Ok(());
+            }
+        }
+    }
+
+    let input_path = session.options.input.as_ref().expect("Input file required for compilation");
+    let source = std::fs::read_to_string(input_path)?;
     let source_id = izel_span::SourceId(0);
     let mut lexer = izel_lexer::Lexer::new(&source, source_id);
 

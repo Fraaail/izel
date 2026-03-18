@@ -1,0 +1,13 @@
+[package]
+name = "izel_fmt"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lossless CST-based deterministic formatter for Izel."
+
+[dependencies]
+izel_span = { workspace = true }
+izel_lexer = { workspace = true }
+izel_parser = { workspace = true }

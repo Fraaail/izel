@@ -1,0 +1,13 @@
+[package]
+name = "izel_pm"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Package manager and dependency resolver for Izel."
+
+[dependencies]
+winnow = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

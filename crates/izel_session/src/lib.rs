@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[command(author, version, about, long_about = None)]
 pub struct SessionOptions {
     /// The input file to compile.
-    pub input: PathBuf,
+    pub input: Option<PathBuf>,
 
     /// The output path for the compiled binary.
     #[arg(short, long)]
@@ -29,6 +29,25 @@ pub struct SessionOptions {
     /// Enable runtime contract checking (inject @requires/@ensures assertions).
     #[arg(long)]
     pub check_contracts: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(clap::Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Format a source file
+    Fmt {
+        /// The file to format
+        input: PathBuf,
+    },
+    /// Start the language server
+    Lsp,
+    /// Resolve project dependencies
+    Deps {
+        /// Path to Izel.toml
+        manifest_path: PathBuf,
+    },
 }
 
 pub struct Session {

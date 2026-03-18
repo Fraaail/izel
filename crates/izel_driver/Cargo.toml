@@ -22,6 +22,9 @@ inkwell = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
+izel_fmt = { workspace = true }
+izel_lsp = { workspace = true }
+izel_pm = { workspace = true }
 
 [[bin]]
 name = "izelc"

@@ -34,7 +34,7 @@ pub fn elaborate_dual(dual: &mut ast::Dual) -> Option<ast::Item> {
 }
 
 fn generate_roundtrip_test(shape_name: &str, encode: &ast::Forge, _decode: &ast::Forge) -> ast::Item {
-    let test_name = format!("test_{}_roundtrip", shape_name.to_lowercase());
+    let _test_name = format!("test_{}_roundtrip", shape_name.to_lowercase());
     ast::Item::Forge(ast::Forge {
         name: format!("{}_test", shape_name),
         is_flow: false,

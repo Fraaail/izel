@@ -1,0 +1,21 @@
+[package]
+name = "izel_lsp"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Language Server Protocol implementation for Izel."
+
+[dependencies]
+tower-lsp = "0.20"
+tokio = { version = "1.32", features = ["full"] }
+serde = { workspace = true }
+serde_json = "1.0"
+izel_parser = { workspace = true }
+izel_lexer = { workspace = true }
+izel_span = { workspace = true }
+izel_diagnostics = { workspace = true }
+izel_resolve = { workspace = true }
+izel_typeck = { workspace = true }
+izel_ast_lower = { workspace = true }
