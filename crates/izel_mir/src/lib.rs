@@ -31,6 +31,12 @@ pub enum Instruction {
     Call(Place, String, Vec<Operand>),
     StorageLive(Local),
     StorageDead(Local),
+    /// Runtime contract assertion: if operand is false, abort with message.
+    Assert(Operand, String),
+    /// Enter a memory zone — allocator becomes active.
+    ZoneEnter(String),
+    /// Exit a memory zone — bulk deallocation.
+    ZoneExit(String),
 }
 
 #[derive(Debug, Clone)]
@@ -75,13 +81,22 @@ pub enum Constant {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
-    Add, Sub, Mul, Div,
-    Eq, Ne, Lt, Le, Gt, Ge,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnOp {
-    Not, Neg,
+    Not,
+    Neg,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +112,10 @@ impl MirBody {
             instructions: Vec::new(),
             terminator: None,
         });
-        Self { blocks, entry, locals: Vec::new() }
+        Self {
+            blocks,
+            entry,
+            locals: Vec::new(),
+        }
     }
 }

@@ -18,6 +18,7 @@ pub enum Item {
     Shape(Shape),
     Scroll(Scroll),
     Weave(Weave),
+    Dual(Dual),
     Impl(Impl),
     Alias(Alias),
     Ward(Ward),
@@ -53,11 +54,21 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone)]
+pub struct Dual {
+    pub name: String,
+    pub generic_params: Vec<GenericParam>,
+    pub items: Vec<Item>,
+    pub attributes: Vec<Attribute>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Shape {
     pub name: String,
     pub generic_params: Vec<GenericParam>,
     pub fields: Vec<Field>,
     pub attributes: Vec<Attribute>,
+    pub invariants: Vec<Expr>,
     pub span: Span,
 }
 
@@ -165,6 +176,14 @@ pub enum Expr {
     Return(Box<Expr>),
     Next,
     Break,
+    Zone {
+        name: String,
+        body: Block,
+    },
+    Cascade {
+        expr: Box<Expr>,
+        context: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -178,17 +197,34 @@ pub enum Literal {
 
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Rem,
-    Eq, Ne, Lt, Gt, Le, Ge,
-    And, Or,
-    BitAnd, BitOr, BitXor,
-    Shl, Shr,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Pipeline,
 }
 
 #[derive(Debug, Clone)]
 pub enum UnaryOp {
-    Neg, Not, BitNot, Deref, Ref(bool), // bool is mut
+    Neg,
+    Not,
+    BitNot,
+    Deref,
+    Ref(bool), // bool is mut
 }
 
 #[derive(Debug, Clone)]

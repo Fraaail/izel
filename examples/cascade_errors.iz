@@ -1,0 +1,25 @@
+// Example file illustrating Izel Cascade Errors chain
+
+forge fallible_operation(val: i32) -> Result<i32, String> {
+    if val < 0 {
+        give Err("Value cannot be negative")
+    }
+    give Ok(val * 2)
+}
+
+forge process_data() -> Result<i32, String> {
+    // Basic propagation: implicitly adds this line's `here!()` context
+    let first = fallible_operation(-1)!;
+    
+    // Propagation with user context: overrides default message
+    let second = fallible_operation(first)! or "Failed processing second step";
+    
+    give Ok(second + 10)
+}
+
+forge main() {
+    let result = process_data();
+    // Prints error with full stack:
+    // "Failed processing second step" at main.iz:13
+    // "Value cannot be negative" at main.iz:10
+}

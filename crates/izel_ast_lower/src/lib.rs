@@ -3,6 +3,8 @@ use izel_parser::ast;
 use izel_lexer::TokenKind;
 use izel_span::Span;
 
+pub mod elaboration;
+
 pub struct Lowerer<'a> {
     source: &'a str,
 }
@@ -16,26 +18,34 @@ impl<'a> Lowerer<'a> {
         let mut items = Vec::new();
         for child in &node.children {
             if let SyntaxElement::Node(child_node) = child {
-                if let Some(item) = self.lower_item(child_node) {
-                    items.push(item);
-                }
+                items.extend(self.lower_item(child_node));
             }
         }
         ast::Module { items }
     }
 
-    pub fn lower_item(&self, node: &SyntaxNode) -> Option<ast::Item> {
+    pub fn lower_item(&self, node: &SyntaxNode) -> Vec<ast::Item> {
+        let mut results = Vec::new();
         match node.kind {
-            NodeKind::ForgeDecl => Some(ast::Item::Forge(self.lower_forge(node))),
-            NodeKind::ShapeDecl => Some(ast::Item::Shape(self.lower_shape(node))),
-            NodeKind::ScrollDecl => Some(ast::Item::Scroll(self.lower_scroll(node))),
-            NodeKind::WeaveDecl => Some(ast::Item::Weave(self.lower_weave(node))),
-            NodeKind::WardDecl => Some(ast::Item::Ward(self.lower_ward(node))),
-            NodeKind::DrawDecl => Some(ast::Item::Draw(self.lower_draw(node))),
-            NodeKind::ImplBlock => Some(ast::Item::Impl(self.lower_impl(node))),
-            NodeKind::TypeAlias => Some(ast::Item::Alias(self.lower_alias(node))),
-            _ => None,
+            NodeKind::ForgeDecl => results.push(ast::Item::Forge(self.lower_forge(node))),
+            NodeKind::ShapeDecl => results.push(ast::Item::Shape(self.lower_shape(node))),
+            NodeKind::ScrollDecl => results.push(ast::Item::Scroll(self.lower_scroll(node))),
+            NodeKind::WeaveDecl => results.push(ast::Item::Weave(self.lower_weave(node))),
+            NodeKind::WardDecl => results.push(ast::Item::Ward(self.lower_ward(node))),
+            NodeKind::DualDecl => {
+                if let Some((dual, generated_test)) = self.lower_dual(node) {
+                    results.push(ast::Item::Dual(dual));
+                    if let Some(test) = generated_test {
+                        results.push(test);
+                    }
+                }
+            }
+            NodeKind::DrawDecl => results.push(ast::Item::Draw(self.lower_draw(node))),
+            NodeKind::ImplBlock => results.push(ast::Item::Impl(self.lower_impl(node))),
+            NodeKind::TypeAlias => results.push(ast::Item::Alias(self.lower_alias(node))),
+            _ => {}
         }
+        results
     }
 
     fn lower_forge(&self, node: &SyntaxNode) -> ast::Forge {
@@ -108,6 +118,7 @@ impl<'a> Lowerer<'a> {
         let mut fields = Vec::new();
         let mut generic_params = Vec::new();
         let mut attributes = Vec::new();
+        let mut invariants = Vec::new();
 
         for child in &node.children {
             match child {
@@ -127,11 +138,22 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        // Extract #[invariant] attributes into invariants
+        let mut non_invariant_attrs = Vec::new();
+        for attr in attributes {
+            if attr.name == "invariant" {
+                invariants.extend(attr.args);
+            } else {
+                non_invariant_attrs.push(attr);
+            }
+        }
+
         ast::Shape {
             name,
             generic_params,
             fields,
-            attributes,
+            attributes: non_invariant_attrs,
+            invariants,
             span: node.span(),
         }
     }
@@ -153,6 +175,44 @@ impl<'a> Lowerer<'a> {
         }
 
         ast::Field { name, ty, span: node.span() }
+    }
+
+    fn lower_dual(&self, node: &SyntaxNode) -> Option<(ast::Dual, Option<ast::Item>)> {
+        let mut name = String::new();
+        let mut generic_params = Vec::new();
+        let mut items = Vec::new();
+        let mut attributes = Vec::new();
+
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(token) if self.is_naming_ident(token.kind) => {
+                    name = self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::Attributes => {
+                    attributes = self.lower_attributes(n);
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::GenericParams => {
+                    generic_params = self.lower_generic_params(n);
+                }
+                SyntaxElement::Node(n) => {
+                    // Try to lower any enclosed item like a forge declaration
+                    items.extend(self.lower_item(n));
+                }
+                _ => {}
+            }
+        }
+
+        let mut dual = ast::Dual {
+            name,
+            generic_params,
+            items,
+            attributes,
+            span: node.span(),
+        };
+
+        let generated_test = elaboration::elaborate_dual(&mut dual);
+
+        Some((dual, generated_test))
     }
 
     fn lower_generic_params(&self, node: &SyntaxNode) -> Vec<ast::GenericParam> {
@@ -318,6 +378,12 @@ impl<'a> Lowerer<'a> {
                  if node.kind == NodeKind::PathExpr {
                       return self.lower_type_path(node);
                  }
+
+                 // If we have generic args, preserve them as a Path type
+                 // so the typeck layer can resolve parameterized types (e.g., NonZero<i32>)
+                 if !args.is_empty() && !name.is_empty() {
+                      return ast::Type::Path(vec![name], args);
+                 }
                  
                  ast::Type::Prim(if name.is_empty() { "Error".to_string() } else { name })
             }
@@ -421,6 +487,33 @@ impl<'a> Lowerer<'a> {
                  };
                  ast::Expr::Binary(op, Box::new(lhs), Box::new(rhs))
             }
+            NodeKind::CascadeExpr => {
+                let mut expr = None;
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        expr = Some(self.lower_expr(n));
+                        break;
+                    }
+                }
+                let mut context = None;
+                if node.children.len() > 3 {
+                    let mut found_or = false;
+                    for child in node.children.iter().skip(1) {
+                         if let SyntaxElement::Token(t) = child {
+                             if t.kind == TokenKind::Or { found_or = true; }
+                         } else if let SyntaxElement::Node(n) = child {
+                             if found_or {
+                                 context = Some(Box::new(self.lower_expr(n)));
+                                 break;
+                             }
+                         }
+                    }
+                }
+                ast::Expr::Cascade {
+                    expr: Box::new(expr.unwrap_or(ast::Expr::Literal(ast::Literal::Nil))),
+                    context,
+                }
+            }
             NodeKind::UnaryExpr => {
                 let mut op = ast::UnaryOp::Neg;
                 let mut expr = None;
@@ -434,11 +527,6 @@ impl<'a> Lowerer<'a> {
                                     TokenKind::Star => ast::UnaryOp::Deref,
                                     TokenKind::Ampersand => ast::UnaryOp::Ref(false),
                                     TokenKind::AmpersandTilde => ast::UnaryOp::Ref(true),
-                                    TokenKind::Bang => {
-                                         // Postfix !
-                                         let inner = self.lower_element(&node.children[0]);
-                                         return self.desugar_propagate(inner);
-                                    }
                                     _ => ast::UnaryOp::Neg,
                                };
                           }
@@ -527,6 +615,29 @@ impl<'a> Lowerer<'a> {
                     ast::Expr::Literal(ast::Literal::Nil)
                 }
             }
+            NodeKind::MacroCall => {
+                let mut macro_name = String::new();
+                for child in &node.children {
+                    if let SyntaxElement::Token(t) = child {
+                        if t.kind == TokenKind::Ident {
+                            macro_name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                            break;
+                        }
+                    }
+                }
+                
+                if macro_name == "here" {
+                    // Calculate line number dynamically based on the node's span.
+                    let span = node.span();
+                    let file_content = &self.source[..span.lo.0 as usize];
+                    let line_number = file_content.chars().filter(|&c| c == '\n').count() + 1;
+                    
+                    let location_string = format!("{}:{}", "main.iz", line_number);
+                    ast::Expr::Literal(ast::Literal::Str(location_string))
+                } else {
+                    ast::Expr::Literal(ast::Literal::Nil)
+                }
+            }
             NodeKind::StructLiteral => {
                 let path = self.lower_element_type(&node.children[0]);
                 let mut fields = Vec::new();
@@ -569,34 +680,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn desugar_propagate(&self, expr: ast::Expr) -> ast::Expr {
-        // x! -> branch x { Some(v) => v, None => return Nil, Ok(v) => v, Err(e) => return Err(e) }
-        ast::Expr::Branch {
-            target: Box::new(expr),
-            arms: vec![
-                ast::Arm {
-                    pattern: ast::Pattern::Variant("Some".to_string(), vec![ast::Pattern::Ident("v".to_string())]),
-                    body: ast::Expr::Ident("v".to_string(), Span::dummy()),
-                    span: Span::dummy(),
-                },
-                ast::Arm {
-                    pattern: ast::Pattern::Ident("None".to_string()),
-                    body: ast::Expr::Return(Box::new(ast::Expr::Literal(ast::Literal::Nil))),
-                    span: Span::dummy(),
-                },
-                ast::Arm {
-                    pattern: ast::Pattern::Variant("Ok".to_string(), vec![ast::Pattern::Ident("v".to_string())]),
-                    body: ast::Expr::Ident("v".to_string(), Span::dummy()),
-                    span: Span::dummy(),
-                },
-                ast::Arm {
-                    pattern: ast::Pattern::Variant("Err".to_string(), vec![ast::Pattern::Ident("e".to_string())]),
-                    body: ast::Expr::Return(Box::new(ast::Expr::Ident("e".to_string(), Span::dummy()))),
-                    span: Span::dummy(),
-                }
-            ]
-        }
-    }
 
     fn desugar_coalesce(&self, lhs: ast::Expr, rhs: ast::Expr) -> ast::Expr {
         // x ?? y -> branch x { Some(v) => v, None => y, Ok(v) => v, Err(_) => y }
@@ -773,9 +856,7 @@ impl<'a> Lowerer<'a> {
                     name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
                 }
                 SyntaxElement::Node(n) => {
-                     if let Some(item) = self.lower_item(n) {
-                          items.push(item);
-                     }
+                     items.extend(self.lower_item(n));
                 }
                 _ => {}
             }
@@ -817,9 +898,7 @@ impl<'a> Lowerer<'a> {
                      found_for = true;
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::ForgeDecl || n.kind == NodeKind::TypeAlias => {
-                     if let Some(item) = self.lower_item(n) {
-                          items.push(item);
-                     }
+                     items.extend(self.lower_item(n));
                 }
                 SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
                      let ty = ast::Type::Prim(self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string());
@@ -927,10 +1006,12 @@ mod tests {
         let source = "@proof forge f() {}";
         let tokens = tokenize(source);
         let mut parser = izel_parser::Parser::new(tokens);
+        parser.source = source.to_string();
         let cst = parser.parse_decl();
         
         let lowerer = Lowerer::new(source);
-        let item = lowerer.lower_item(&cst).unwrap();
+        let mut items = lowerer.lower_item(&cst);
+        let item = items.pop().unwrap();
         
         if let ast::Item::Forge(f) = item {
             assert_eq!(f.name, "f");
@@ -946,10 +1027,12 @@ mod tests {
         let source = "@requires(n > 0) forge f(n: i32) {}";
         let tokens = tokenize(source);
         let mut parser = izel_parser::Parser::new(tokens);
+        parser.source = source.to_string();
         let cst = parser.parse_decl();
         
         let lowerer = Lowerer::new(source);
-        let item = lowerer.lower_item(&cst).unwrap();
+        let mut items = lowerer.lower_item(&cst);
+        let item = items.pop().unwrap();
         
         if let ast::Item::Forge(f) = item {
             assert_eq!(f.name, "f");
@@ -958,6 +1041,78 @@ mod tests {
             assert_eq!(f.attributes[0].args.len(), 1);
         } else {
             panic!("Expected Forge item");
+        }
+    }
+
+    #[test]
+    fn test_lower_cascade_expr() {
+        let source = "foo!";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens);
+        parser.source = source.to_string();
+        let cst = parser.parse_expr(izel_parser::expr::Precedence::None);
+        
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&cst);
+        
+        match expr {
+            ast::Expr::Cascade { expr, context } => {
+                assert!(matches!(*expr, ast::Expr::Ident(..)));
+                assert!(context.is_none());
+            }
+            _ => panic!("Expected Expr::Cascade"),
+        }
+    }
+
+    #[test]
+    fn test_lower_macro_here() {
+        let source = "here!()";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens);
+        parser.source = source.to_string();
+        let cst = parser.parse_expr(izel_parser::expr::Precedence::None);
+        
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&cst);
+        
+        match expr {
+            ast::Expr::Literal(ast::Literal::Str(s)) => {
+                // Line 1 because the string only has one line, file 'main.iz' is default
+                assert_eq!(s, "main.iz:1");
+            }
+            _ => panic!("Expected Expr::Literal(Str)"),
+        }
+    }
+
+    #[test]
+    fn test_lower_dual_decl() {
+        let source = "dual shape JsonFormat<T> { forge encode(&self, val: &T) }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens);
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        
+        let lowerer = Lowerer::new(source);
+        let mut items = lowerer.lower_item(&cst);
+        let item = items.remove(0); // Take the first item which should be Dual
+        
+        if let ast::Item::Dual(d) = item {
+            assert_eq!(d.name, "JsonFormat");
+            assert_eq!(d.generic_params.len(), 1);
+            // Elaboration should have generated the inverse decode method, resulting in 2 items!
+            assert_eq!(d.items.len(), 2);
+            
+            let mut found_encode = false;
+            let mut found_decode = false;
+            for i in d.items {
+                if let ast::Item::Forge(f) = i {
+                    if f.name == "encode" { found_encode = true; }
+                    if f.name == "decode" { found_decode = true; }
+                }
+            }
+            assert!(found_encode && found_decode, "Both encode and decode should be present");
+        } else {
+            panic!("Expected Dual item");
         }
     }
 }

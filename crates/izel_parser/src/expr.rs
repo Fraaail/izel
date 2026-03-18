@@ -1,5 +1,5 @@
-use crate::Parser;
 use crate::cst::{NodeKind, SyntaxElement, SyntaxNode};
+use crate::Parser;
 use izel_lexer::TokenKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,7 +37,13 @@ impl Precedence {
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Product,
             TokenKind::As => Precedence::Cast,
-            TokenKind::Bang | TokenKind::Dot | TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::DoubleColon | TokenKind::OpenBrace | TokenKind::Question => Precedence::Call,
+            TokenKind::Bang
+            | TokenKind::Dot
+            | TokenKind::OpenParen
+            | TokenKind::OpenBracket
+            | TokenKind::DoubleColon
+            | TokenKind::OpenBrace
+            | TokenKind::Question => Precedence::Call,
             _ => Precedence::None,
         }
     }
@@ -46,9 +52,9 @@ impl Precedence {
 impl Parser {
     pub fn parse_expr(&mut self, min_precedence: Precedence) -> SyntaxNode {
         let mut lhs = self.parse_primary();
-        
+
         loop {
-            // Skip trivia but we don't necessarily have a place to put it here 
+            // Skip trivia but we don't necessarily have a place to put it here
             // without changing the structure significantly.
             // Let's just peer at the next non-trivia token.
             let mut offset = 0;
@@ -60,32 +66,38 @@ impl Parser {
                 }
             }
 
-            let kind = self.tokens.get(self.pos + offset).map(|t| t.kind).unwrap_or(TokenKind::Eof);
+            let kind = self
+                .tokens
+                .get(self.pos + offset)
+                .map(|t| t.kind)
+                .unwrap_or(TokenKind::Eof);
             let prec = Precedence::from_kind(kind);
             if prec <= min_precedence || prec == Precedence::None {
                 break;
             }
 
             // Consume the trivia we skipped
-            for _ in 0..offset { self.bump(); }
-            
+            for _ in 0..offset {
+                self.bump();
+            }
+
             if kind == TokenKind::OpenParen {
-                 lhs = self.parse_call(lhs);
+                lhs = self.parse_call(lhs);
             } else if kind == TokenKind::DoubleColon {
-                 lhs = self.parse_path_or_turbofish(lhs);
+                lhs = self.parse_path_or_turbofish(lhs);
             } else if kind == TokenKind::OpenBrace {
-                 lhs = self.parse_struct_literal_expr(lhs);
+                lhs = self.parse_struct_literal_expr(lhs);
             } else if kind == TokenKind::Question {
-                 lhs = self.parse_optional_chaining(lhs);
+                lhs = self.parse_optional_chaining(lhs);
             } else if kind == TokenKind::Dot {
-                 lhs = self.parse_member_access(lhs);
+                lhs = self.parse_member_access(lhs);
             } else if kind == TokenKind::Bang {
-                 lhs = self.parse_postfix_bang(lhs);
+                lhs = self.parse_postfix_bang(lhs);
             } else {
                 lhs = self.parse_binary(lhs, prec);
             }
         }
-        
+
         lhs
     }
 
@@ -93,12 +105,68 @@ impl Parser {
         let mut children = self.eat_trivia();
         let kind = self.current_kind();
         match kind {
-            TokenKind::Int { .. } | TokenKind::Float | TokenKind::Str { .. } | TokenKind::InterpolatedStr { .. } | TokenKind::True | TokenKind::False | TokenKind::Nil => {
+            TokenKind::Int { .. }
+            | TokenKind::Float
+            | TokenKind::Str { .. }
+            | TokenKind::InterpolatedStr { .. }
+            | TokenKind::True
+            | TokenKind::False
+            | TokenKind::Nil => {
                 children.push(SyntaxElement::Token(self.bump()));
                 SyntaxNode::new(NodeKind::Literal, children)
             }
             TokenKind::Ident | TokenKind::SelfKw | TokenKind::SelfType => {
-                children.push(SyntaxElement::Token(self.bump()));
+                let token = self.bump();
+                let text = &self.source[token.span.lo.0 as usize..token.span.hi.0 as usize];
+                children.push(SyntaxElement::Token(token));
+                
+                // Inspect for here!()
+                if text == "here" {
+                    let mut peek_trivia = Vec::new();
+                    let mut offset = 0;
+                    while let Some(t) = self.tokens.get(self.pos + offset) {
+                         if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Comment {
+                              peek_trivia.push(SyntaxElement::Token(*t));
+                              offset += 1;
+                         } else {
+                              break;
+                         }
+                    }
+                    if let Some(t) = self.tokens.get(self.pos + offset) {
+                         if t.kind == TokenKind::Bang {
+                              // Consume trivia and !
+                              for _ in 0..offset { children.push(SyntaxElement::Token(self.bump())); }
+                              children.push(SyntaxElement::Token(self.bump())); // !
+                              
+                              // Expect ()
+                              let mut offset_paren = 0;
+                              while let Some(pt) = self.tokens.get(self.pos + offset_paren) {
+                                  if pt.kind == TokenKind::Whitespace || pt.kind == TokenKind::Comment {
+                                      offset_paren += 1;
+                                  } else {
+                                      break;
+                                  }
+                              }
+                              
+                              if let Some(pt) = self.tokens.get(self.pos + offset_paren) {
+                                  if pt.kind == TokenKind::OpenParen {
+                                       for _ in 0..offset_paren { children.push(SyntaxElement::Token(self.bump())); }
+                                       children.push(SyntaxElement::Token(self.bump())); // (
+                                       
+                                       // skip until )
+                                       while self.current_kind() != TokenKind::CloseParen && self.current_kind() != TokenKind::Eof {
+                                           children.push(SyntaxElement::Token(self.bump()));
+                                       }
+                                       if self.current_kind() == TokenKind::CloseParen {
+                                           children.push(SyntaxElement::Token(self.bump())); // )
+                                       }
+                                       return SyntaxNode::new(NodeKind::MacroCall, children);
+                                  }
+                              }
+                         }
+                    }
+                }
+                
                 SyntaxNode::new(NodeKind::Ident, children)
             }
             TokenKind::OpenParen => {
@@ -110,7 +178,12 @@ impl Parser {
                 }
                 SyntaxNode::new(NodeKind::ParenExpr, children)
             }
-            TokenKind::Minus | TokenKind::Not | TokenKind::Tilde | TokenKind::Star | TokenKind::Ampersand | TokenKind::AmpersandTilde => {
+            TokenKind::Minus
+            | TokenKind::Not
+            | TokenKind::Tilde
+            | TokenKind::Star
+            | TokenKind::Ampersand
+            | TokenKind::AmpersandTilde => {
                 children.push(SyntaxElement::Token(self.bump()));
                 children.push(SyntaxElement::Node(self.parse_expr(Precedence::Unary)));
                 SyntaxNode::new(NodeKind::UnaryExpr, children)
@@ -135,13 +208,15 @@ impl Parser {
                 children.push(SyntaxElement::Token(self.bump()));
                 self.parse_each_expr(children)
             }
+            TokenKind::Zone => {
+                children.push(SyntaxElement::Token(self.bump()));
+                self.parse_zone_expr(children)
+            }
             TokenKind::Bind => {
                 children.push(SyntaxElement::Token(self.bump()));
                 self.parse_bind_expr(children)
             }
-            TokenKind::Raw => {
-                self.parse_raw_expr()
-            }
+            TokenKind::Raw => self.parse_raw_expr(),
             _ => {
                 children.push(SyntaxElement::Token(self.bump()));
                 SyntaxNode::new(NodeKind::Error, children)
@@ -162,7 +237,9 @@ impl Parser {
         children.extend(self.eat_trivia().into_iter());
         if self.current_kind() == TokenKind::OpenParen {
             children.push(SyntaxElement::Token(self.bump())); // (
-            while self.current_kind() != TokenKind::CloseParen && self.current_kind() != TokenKind::Eof {
+            while self.current_kind() != TokenKind::CloseParen
+                && self.current_kind() != TokenKind::Eof
+            {
                 children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
                 children.extend(self.eat_trivia().into_iter());
                 if self.current_kind() == TokenKind::Comma {
@@ -197,7 +274,9 @@ impl Parser {
         children.extend(self.eat_trivia().into_iter());
         if self.current_kind() == TokenKind::OpenBrace {
             children.push(SyntaxElement::Token(self.bump()));
-            while self.current_kind() != TokenKind::CloseBrace && self.current_kind() != TokenKind::Eof {
+            while self.current_kind() != TokenKind::CloseBrace
+                && self.current_kind() != TokenKind::Eof
+            {
                 // simple field: expr
                 children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
                 children.extend(self.eat_trivia().into_iter());
@@ -234,7 +313,33 @@ impl Parser {
         let mut children = vec![SyntaxElement::Node(lhs)];
         children.extend(self.eat_trivia().into_iter());
         children.push(SyntaxElement::Token(self.bump())); // !
-        SyntaxNode::new(NodeKind::UnaryExpr, children)
+        
+        let mut peek_trivia = Vec::new();
+        let mut offset = 0;
+        while let Some(t) = self.tokens.get(self.pos + offset) {
+            if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Comment {
+                peek_trivia.push(SyntaxElement::Token(*t));
+                offset += 1;
+            } else {
+                break;
+            }
+        }
+        
+        if let Some(t) = self.tokens.get(self.pos + offset) {
+             if t.kind == TokenKind::Or {
+                 // Consume trivia and 'or'
+                 for _ in 0..offset {
+                     children.push(SyntaxElement::Token(self.bump()));
+                 }
+                 children.push(SyntaxElement::Token(self.bump())); // or
+                 
+                 // Parse the context expression
+                 let context_expr = self.parse_expr(Precedence::None);
+                 children.push(SyntaxElement::Node(context_expr));
+             }
+        }
+
+        SyntaxNode::new(NodeKind::CascadeExpr, children)
     }
 
     fn parse_optional_chaining(&mut self, lhs: SyntaxNode) -> SyntaxNode {
@@ -243,12 +348,69 @@ impl Parser {
         children.push(SyntaxElement::Token(self.bump())); // ?
         children.extend(self.eat_trivia().into_iter());
         if self.current_kind() == TokenKind::Dot {
-             children.push(SyntaxElement::Token(self.bump())); // .
-             children.extend(self.eat_trivia().into_iter());
-             if self.current_kind() == TokenKind::Ident {
-                  children.push(SyntaxElement::Token(self.bump()));
-             }
+            children.push(SyntaxElement::Token(self.bump())); // .
+            children.extend(self.eat_trivia().into_iter());
+            if self.current_kind() == TokenKind::Ident {
+                children.push(SyntaxElement::Token(self.bump()));
+            }
         }
         SyntaxNode::new(NodeKind::MemberExpr, children)
+    }
+
+    pub fn parse_zone_expr(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
+        children.extend(self.eat_trivia().into_iter());
+        if self.is_naming_ident() {
+            children.push(SyntaxElement::Token(self.bump())); // zone name
+        }
+        children.extend(self.eat_trivia().into_iter());
+        if self.current_kind() == TokenKind::OpenBrace {
+            children.push(SyntaxElement::Node(self.parse_block()));
+        }
+        SyntaxNode::new(NodeKind::ZoneExpr, children)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use izel_lexer::Lexer;
+
+    fn parse_test_expr(src: &str, min_prec: Precedence) -> SyntaxNode {
+        let source_id = izel_span::SourceId(0);
+        let mut lexer = Lexer::new(src, source_id);
+        let mut tokens = Vec::new();
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+        let mut parser = Parser::new(tokens);
+        parser.source = src.to_string();
+        parser.parse_expr(min_prec)
+    }
+
+    #[test]
+    fn test_parse_cascade_bang_only() {
+        let node = parse_test_expr("foo!", Precedence::None);
+        assert_eq!(node.kind, NodeKind::CascadeExpr);
+        // Expect: expr, !
+        assert_eq!(node.children.len(), 2); 
+    }
+
+    #[test]
+    fn test_parse_cascade_bang_or_msg() {
+        let node = parse_test_expr("foo! or \"error\"", Precedence::None);
+        assert_eq!(node.kind, NodeKind::CascadeExpr);
+        // Exact layout depends on trivia handling, but it will have > 2 children
+        assert!(node.children.len() > 2);
+    }
+
+    #[test]
+    fn test_parse_macro_call_here() {
+        let node = parse_test_expr("here!()", Precedence::None);
+        assert_eq!(node.kind, NodeKind::MacroCall);
     }
 }

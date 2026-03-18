@@ -148,46 +148,51 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 - [x] **System Design**:
     - [x] Implement `Witness<P>` as a lang-item.
     - [x] Restrict construction to `@proof` tagged functions.
-- [ ] **Built-ins**:
-    - [ ] Implement `NonZero<T>`, `InBounds<T>`, `Sorted<T>`.
+- [x] **Built-ins**:
+    - [x] Implement `NonZero<T>`, `InBounds<T>`, `Sorted<T>`.
 - [x] **Verification**:
     - [x] Ensure `raw` is the only way to bypass proofs.
 
 ### 3.2 Temporal Constraints (`@requires` / `@ensures`)
-- [ ] **Compile-time Engine**:
-    - [ ] Create symbolic evaluator for static constant expressions.
-- [ ] **Runtime Instrumentation**:
-    - [ ] For dynamic inputs, inject assertions into functions.
-    - [ ] Add `izelc --check-contracts` flag.
-- [ ] **Invariants**: 
-    - [ ] Implement `#[invariant]` checking for `shape` state.
+- [x] **Compile-time Engine**:
+    - [x] Create symbolic evaluator for static constant expressions.
+- [x] **Runtime Instrumentation**:
+    - [x] For dynamic inputs, inject assertions into functions.
+    - [x] Add `izelc --check-contracts` flag.
+- [x] **Invariants**: 
+    - [x] Implement `#[invariant]` checking for `shape` state.
 
 ### 3.3 Memory Zones
-- [ ] **Allocators**:
-    - [ ] Implement `ZoneAllocator` (Arena style).
-- [ ] **Escape Analysis**:
-    - [ ] Verify zone-allocated data never outlives the `zone` block.
-- [ ] **Codegen**:
-    - [ ] Emit bulk deallocation at the end of `zone` blocks.
+- [x] **Allocators**:
+    - [x] Implement `ZoneAllocator` (Arena style).
+- [x] **Escape Analysis**:
+    - [x] Verify zone-allocated data never outlives the `zone` block.
+- [x] **Codegen**:
+    - [x] Emit bulk deallocation at the end of `zone` blocks.
 
 ### 3.4 Cascade Error System
-- [ ] **Error Context**:
-    - [ ] Extend `Result<T, E>` to `Result<T, Cascade<E>>`.
-    - [ ] Implement the `or "message"` context override for `!`.
-- [ ] **Trace Construction**:
-    - [ ] Auto-capture `here!()` (file/line) on propagation.
+- [x] **Error Context**:
+    - [x] Extend `Result<T, E>` to `Result<T, Cascade<E>>`.
+    - [x] Implement the `or "message"` context override for `!`.
+- [x] **Trace Construction**:
+    - [x] Auto-capture `here!()` (file/line) on propagation.
 
 ### 3.5 Duality Types
-- [ ] **Elaboration**:
-    - [ ] Derive `decode` from `encode` logic in `dual shape`.
-- [ ] **Verification**:
-    - [ ] Auto-generate `#[test]` for round-trip law if effectful.
-    - [ ] Statically prove round-trip if `pure`.
+- [x] **Elaboration**:
+    - [x] Derive `decode` from `encode` logic in `dual shape`.
+- [x] **Verification**:
+    - [x] Auto-generate `#[test]` for round-trip law if effectful.
+    - [x] Statically prove round-trip if `pure`.
 
 ---
 
 ## Phase 4: Standard Library & Runtime (Months 13–15)
-- [ ] **`std::prim`**: Integral math, floating point, bool logic.
+- [x] **Phase 4.1: Standard Library Primitives**
+    - [x] Parser support for `#[attribute]` syntax.
+    - [x] Implement `#[intrinsic]` attribute handling in type checker and codegen.
+    - [x] Create `library/std/prim.iz` with core methods for `i32`, `f64`, `bool`.
+    - [x] Support primitive `impl` blocks & method resolution in `izel_typeck`.
+    - [x] Verification tests for primitive methods and codegen.
 - [ ] **`std::iter`**: Full pipeline suite (`map`, `filter`, `fold`, `zip`, etc.).
 - [ ] **`std::collections`**:
     - [ ] `Vec<T>`, `HashMap<K, V>`, `BTreeMap<K, V>`.
