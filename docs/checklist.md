@@ -148,8 +148,8 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 - [x] **System Design**:
     - [x] Implement `Witness<P>` as a lang-item.
     - [x] Restrict construction to `@proof` tagged functions.
-- [ ] **Built-ins**:
-    - [ ] Implement `NonZero<T>`, `InBounds<T>`, `Sorted<T>`.
+- [x] **Built-ins**:
+    - [x] Implement `NonZero<T>`, `InBounds<T>`, `Sorted<T>`.
 - [x] **Verification**:
     - [x] Ensure `raw` is the only way to bypass proofs.
 

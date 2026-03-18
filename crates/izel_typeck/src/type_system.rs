@@ -1,5 +1,17 @@
 use crate::DefId;
 
+/// Built-in witness type kinds.
+/// Each represents a zero-cost compile-time proof that a predicate holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinWitness {
+    /// `NonZero<T>` — value is proven non-zero
+    NonZero,
+    /// `InBounds<T>` — index is proven valid for a collection
+    InBounds,
+    /// `Sorted<T>` — collection is proven to be sorted
+    Sorted,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     /// Primitive types
@@ -38,6 +50,9 @@ pub enum Type {
     
     /// Witness types (Witness<P>)
     Witness(Box<Type>),
+
+    /// Built-in witness types (NonZero<T>, InBounds<T>, Sorted<T>)
+    BuiltinWitness(BuiltinWitness, Box<Type>),
     
     /// Error sentinel
     Error,
@@ -62,8 +77,6 @@ pub enum PrimType {
     Str,
     Void,
     None,
-    NonZero,
-    InBounds,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

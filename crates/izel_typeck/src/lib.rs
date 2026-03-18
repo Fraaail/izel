@@ -1,7 +1,7 @@
 pub mod type_system;
 
 use izel_parser::ast;
-use type_system::{Type, PrimType, Scheme, Effect, EffectSet};
+use type_system::{Type, PrimType, Scheme, Effect, EffectSet, BuiltinWitness};
 use izel_resolve::DefId;
 use rustc_hash::FxHashMap;
 
@@ -398,6 +398,14 @@ impl TypeChecker {
         match ty {
             ast::Type::Prim(s) => match s.as_str() {
                 "i32" => Type::Prim(PrimType::I32),
+                "i64" => Type::Prim(PrimType::I64),
+                "u8" => Type::Prim(PrimType::U8),
+                "u16" => Type::Prim(PrimType::U16),
+                "u32" => Type::Prim(PrimType::U32),
+                "u64" => Type::Prim(PrimType::U64),
+                "usize" => Type::Prim(PrimType::U64), // alias for now
+                "f32" => Type::Prim(PrimType::F32),
+                "f64" => Type::Prim(PrimType::F64),
                 "str" => Type::Prim(PrimType::Str),
                 "bool" => Type::Prim(PrimType::Bool),
                 "void" => Type::Prim(PrimType::Void),
@@ -425,7 +433,26 @@ impl TypeChecker {
                 let inner_ty = self.lower_ast_type(inner);
                 Type::Witness(Box::new(inner_ty))
             }
-            ast::Type::Path(parts, _gen_args) => {
+            ast::Type::Path(parts, gen_args) => {
+                // Check for built-in witness type names with generic args
+                if parts.len() == 1 {
+                    let name = &parts[0];
+                    let builtin = match name.as_str() {
+                        "NonZero" => Some(BuiltinWitness::NonZero),
+                        "InBounds" => Some(BuiltinWitness::InBounds),
+                        "Sorted" => Some(BuiltinWitness::Sorted),
+                        _ => None,
+                    };
+                    if let Some(kind) = builtin {
+                        let inner = if !gen_args.is_empty() {
+                            self.lower_ast_type(&gen_args[0])
+                        } else {
+                            self.new_var() // infer inner type
+                        };
+                        return Type::BuiltinWitness(kind, Box::new(inner));
+                    }
+                }
+
                 if parts.len() > 1 {
                     // Very simple resolver: first part is the base, next is associated type
                     let mut current = if let Some(t) = self.resolve_name(&parts[0]) {
@@ -496,6 +523,10 @@ impl TypeChecker {
             (Type::Cascade(c1), Type::Cascade(c2)) => self.unify(&c1, &c2),
             (Type::Pointer(p1, m1, l1), Type::Pointer(p2, m2, l2)) => m1 == m2 && l1 == l2 && self.unify(&p1, &p2),
             (Type::Witness(w1), Type::Witness(w2)) => self.unify(&w1, &w2),
+            // Built-in witness types: same kind + inner unification
+            (Type::BuiltinWitness(k1, t1), Type::BuiltinWitness(k2, t2)) => {
+                k1 == k2 && self.unify(&t1, &t2)
+            }
             (Type::Function { params: p1, ret: r1, effects: e1 }, Type::Function { params: p2, ret: r2, effects: e2 }) => {
                 if p1.len() != p2.len() { return false; }
                 for (p1, p2) in p1.iter().zip(p2.iter()) {
@@ -517,6 +548,11 @@ impl TypeChecker {
             (Type::Witness(w), t) => if self.is_proof_mode() { self.unify(w, t) } else { false },
             // Witness -> Value: Always allowed
             (t, Type::Witness(w)) => self.unify(t, w),
+
+            // BuiltinWitness -> inner value: Always allowed (extract)
+            (t, Type::BuiltinWitness(_, inner)) => self.unify(t, &inner),
+            // inner value -> BuiltinWitness: ONLY in proof mode
+            (Type::BuiltinWitness(_, inner), t) => if self.is_proof_mode() { self.unify(&inner, t) } else { false },
             
             _ => {
                 false
@@ -970,7 +1006,7 @@ impl TypeChecker {
                 }
                 self.check_and_adjust(var_id, var_level, &ret)
             }
-            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _, _) => {
+            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _, _) | Type::BuiltinWitness(_, inner) => {
                 self.check_and_adjust(var_id, var_level, &inner)
             }
             Type::Static(fields) => {
@@ -1026,7 +1062,7 @@ impl TypeChecker {
                 self.find_gen_vars(&ret, vars, seen, effect_vars, seen_effects, names, seen_names);
                 self.find_gen_effect_vars(&effects, effect_vars, seen_effects);
             }
-            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _, _) => {
+            Type::Optional(inner) | Type::Cascade(inner) | Type::Pointer(inner, _, _) | Type::BuiltinWitness(_, inner) => {
                 self.find_gen_vars(&inner, vars, seen, effect_vars, seen_effects, names, seen_names);
             }
             Type::Static(fields) => {
@@ -1137,6 +1173,7 @@ impl TypeChecker {
             Type::Optional(inner) => Type::Optional(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping))),
             Type::Cascade(inner) => Type::Cascade(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping))),
             Type::Pointer(inner, m, l) => Type::Pointer(Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping)), *m, l.clone()),
+            Type::BuiltinWitness(kind, inner) => Type::BuiltinWitness(*kind, Box::new(self.substitute_scheme(inner, mapping, effect_mapping, name_mapping))),
             Type::Static(fields) => Type::Static(
                 fields.iter().map(|(n, t)| (n.clone(), self.substitute_scheme(t, mapping, effect_mapping, name_mapping))).collect()
             ),
@@ -1191,7 +1228,7 @@ impl TypeChecker {
             Type::Pointer(_, _, l) => {
                 lifetimes.push(l.clone());
             }
-            Type::Optional(inner) | Type::Cascade(inner) => self.collect_lifetimes(&inner, lifetimes),
+            Type::Optional(inner) | Type::Cascade(inner) | Type::BuiltinWitness(_, inner) => self.collect_lifetimes(&inner, lifetimes),
             Type::Function { params, ret, .. } => {
                 for p in params { self.collect_lifetimes(&p, lifetimes); }
                 self.collect_lifetimes(&ret, lifetimes);
@@ -1220,7 +1257,7 @@ impl TypeChecker {
                 }
                 self.replace_elided_lifetimes(inner, lifetime);
             }
-            Type::Optional(inner) | Type::Cascade(inner) => {
+            Type::Optional(inner) | Type::Cascade(inner) | Type::BuiltinWitness(_, inner) => {
                 self.replace_elided_lifetimes(inner, lifetime);
             }
             Type::Function { params, ret, .. } => {
@@ -1332,6 +1369,131 @@ mod tests {
         checker.current_attributes = vec![];
         checker.in_raw_block = true;
         assert!(checker.current_attributes.iter().any(|a| a.name == "proof") || checker.in_raw_block);
+    }
+
+    // ========== Built-in Witness Types Tests ==========
+
+    #[test]
+    fn test_builtin_witness_nonzero_type() {
+        let mut tc = TypeChecker::new();
+        let nz1 = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        let nz2 = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        assert!(tc.unify(&nz1, &nz2), "NonZero<i32> should unify with NonZero<i32>");
+
+        // Different inner types should not unify
+        let nz3 = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I64)));
+        let mut tc2 = TypeChecker::new();
+        assert!(!tc2.unify(&nz1, &nz3), "NonZero<i32> should not unify with NonZero<i64>");
+    }
+
+    #[test]
+    fn test_builtin_witness_inbounds_type() {
+        let mut tc = TypeChecker::new();
+        let ib1 = Type::BuiltinWitness(BuiltinWitness::InBounds, Box::new(Type::Prim(PrimType::U64)));
+        let ib2 = Type::BuiltinWitness(BuiltinWitness::InBounds, Box::new(Type::Prim(PrimType::U64)));
+        assert!(tc.unify(&ib1, &ib2), "InBounds<u64> should unify with InBounds<u64>");
+    }
+
+    #[test]
+    fn test_builtin_witness_sorted_type() {
+        let mut tc = TypeChecker::new();
+        let s1 = Type::BuiltinWitness(BuiltinWitness::Sorted, Box::new(Type::Prim(PrimType::I32)));
+        let s2 = Type::BuiltinWitness(BuiltinWitness::Sorted, Box::new(Type::Prim(PrimType::I32)));
+        assert!(tc.unify(&s1, &s2), "Sorted<i32> should unify with Sorted<i32>");
+    }
+
+    #[test]
+    fn test_builtin_witness_construction_gating() {
+        // Built-in witnesses should NOT promote from plain types outside proof/raw mode
+        let mut tc = TypeChecker::new();
+        tc.current_attributes = vec![];
+        tc.in_raw_block = false;
+
+        let nz = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        let plain = Type::Prim(PrimType::I32);
+
+        // BuiltinWitness(NonZero, i32) as lhs, plain i32 as rhs => should fail (construction)
+        assert!(!tc.unify(&nz, &plain), "Should not construct NonZero<i32> from i32 outside proof mode");
+
+        // In proof mode, construction should be allowed
+        let mut tc2 = TypeChecker::new();
+        tc2.current_attributes = vec![ast::Attribute { name: "proof".to_string(), args: vec![], span: izel_span::Span::dummy() }];
+        let nz2 = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        assert!(tc2.unify(&nz2, &plain), "Should construct NonZero<i32> from i32 in proof mode");
+
+        // In raw block, construction should also be allowed
+        let mut tc3 = TypeChecker::new();
+        tc3.in_raw_block = true;
+        let nz3 = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        assert!(tc3.unify(&nz3, &plain), "Should construct NonZero<i32> from i32 in raw block");
+    }
+
+    #[test]
+    fn test_builtin_witness_value_extraction() {
+        // Extracting the inner value from a BuiltinWitness should always be allowed
+        let mut tc = TypeChecker::new();
+        tc.current_attributes = vec![];
+        tc.in_raw_block = false;
+
+        let nz = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        let plain = Type::Prim(PrimType::I32);
+
+        // plain i32 as lhs, BuiltinWitness as rhs => extraction, always allowed
+        assert!(tc.unify(&plain, &nz), "Should extract i32 from NonZero<i32> outside proof mode");
+
+        let mut tc2 = TypeChecker::new();
+        let ib = Type::BuiltinWitness(BuiltinWitness::InBounds, Box::new(Type::Prim(PrimType::U64)));
+        let plain_u64 = Type::Prim(PrimType::U64);
+        assert!(tc2.unify(&plain_u64, &ib), "Should extract u64 from InBounds<u64>");
+
+        let mut tc3 = TypeChecker::new();
+        let sorted = Type::BuiltinWitness(BuiltinWitness::Sorted, Box::new(Type::Prim(PrimType::I32)));
+        let plain_i32 = Type::Prim(PrimType::I32);
+        assert!(tc3.unify(&plain_i32, &sorted), "Should extract i32 from Sorted<i32>");
+    }
+
+    #[test]
+    fn test_builtin_witness_unify_different_kinds() {
+        let mut tc = TypeChecker::new();
+        let nz = Type::BuiltinWitness(BuiltinWitness::NonZero, Box::new(Type::Prim(PrimType::I32)));
+        let ib = Type::BuiltinWitness(BuiltinWitness::InBounds, Box::new(Type::Prim(PrimType::I32)));
+        assert!(!tc.unify(&nz, &ib), "NonZero<i32> should NOT unify with InBounds<i32>");
+
+        let mut tc2 = TypeChecker::new();
+        let sorted = Type::BuiltinWitness(BuiltinWitness::Sorted, Box::new(Type::Prim(PrimType::I32)));
+        assert!(!tc2.unify(&nz, &sorted), "NonZero<i32> should NOT unify with Sorted<i32>");
+    }
+
+    #[test]
+    fn test_nonzero_parse_and_lower() {
+        // Parse a function with NonZero<i32> parameter and verify it lowers correctly
+        let source = "forge divide(a: i32, b: NonZero<i32>) -> i32 { a }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens);
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let item = lowerer.lower_item(&cst).unwrap();
+
+        if let ast::Item::Forge(f) = item {
+            assert_eq!(f.name, "divide");
+            assert_eq!(f.params.len(), 2);
+
+            // First param should be i32
+            assert!(matches!(f.params[0].ty, ast::Type::Prim(ref s) if s == "i32"));
+
+            // Second param: the AST layer keeps it as a Path("NonZero", [i32]) 
+            // The typeck layer resolves NonZero<i32> to BuiltinWitness
+            let mut tc = TypeChecker::new();
+            let lowered = tc.lower_ast_type(&f.params[1].ty);
+            match lowered {
+                Type::BuiltinWitness(BuiltinWitness::NonZero, inner) => {
+                    assert_eq!(*inner, Type::Prim(PrimType::I32), "Inner type should be i32");
+                }
+                other => panic!("Expected BuiltinWitness(NonZero, i32), got {:?}", other),
+            }
+        } else {
+            panic!("Expected Forge item");
+        }
     }
 
 }

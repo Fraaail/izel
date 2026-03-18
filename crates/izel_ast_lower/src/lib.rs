@@ -318,6 +318,12 @@ impl<'a> Lowerer<'a> {
                  if node.kind == NodeKind::PathExpr {
                       return self.lower_type_path(node);
                  }
+
+                 // If we have generic args, preserve them as a Path type
+                 // so the typeck layer can resolve parameterized types (e.g., NonZero<i32>)
+                 if !args.is_empty() && !name.is_empty() {
+                      return ast::Type::Path(vec![name], args);
+                 }
                  
                  ast::Type::Prim(if name.is_empty() { "Error".to_string() } else { name })
             }

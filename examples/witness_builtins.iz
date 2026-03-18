@@ -1,0 +1,58 @@
+// ⬡ IZEL — Built-in Witness Types Example
+// Demonstrates NonZero<T>, InBounds<T>, and Sorted<T> witness types
+
+// --- NonZero<T> ---
+
+// Proof function: validates that a value is non-zero
+@proof forge prove_nonzero(n: i32) -> NonZero<i32> {
+    raw n
+}
+
+// Safe division: the NonZero<i32> proof eliminates the need for runtime checks
+forge divide(a: i32, b: NonZero<i32>) -> i32 {
+    a / b
+}
+
+// --- InBounds<T> ---
+
+// Proof function: validates that an index is within bounds
+@proof forge prove_inbounds(idx: usize) -> InBounds<usize> {
+    raw idx
+}
+
+// Safe indexing: InBounds proof guarantees no out-of-bounds access
+forge safe_get(data: &[i32], idx: InBounds<usize>) -> i32 {
+    data[idx]
+}
+
+// --- Sorted<T> ---
+
+// Proof function: validates that a collection is sorted
+@proof forge prove_sorted(data: &[i32]) -> Sorted<i32> {
+    raw data
+}
+
+// Binary search only on proven-sorted data
+forge binary_search(data: Sorted<i32>, target: i32) -> ?usize {
+    nil
+}
+
+// --- Usage ---
+
+forge main() {
+    let x = 100;
+    let y = 5;
+
+    // Explicit raw bypass to construct NonZero
+    let nz: NonZero<i32> = raw y;
+    let result = divide(x, nz);
+
+    // ERROR: Cannot construct NonZero outside proof/raw
+    // let bad: NonZero<i32> = y;
+
+    // InBounds usage with explicit proof
+    let idx: InBounds<usize> = raw 3;
+
+    // Sorted usage
+    let sorted_data: Sorted<i32> = raw 42;
+}
