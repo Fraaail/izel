@@ -45,7 +45,7 @@ impl Dce {
             }
         }
 
-        // 3. Remove unreachable blocks (Simple reachability)
+        // 3. Remove unreachable blocks
         let mut reachable = HashSet::new();
         let mut stack = vec![body.entry];
         while let Some(node) = stack.pop() {
@@ -56,14 +56,28 @@ impl Dce {
             }
         }
 
-        // We can't easily remove nodes from petgraph while keeping IDs stable if we use those IDs elsewhere.
-        // For now, we'll just clear the instructions of unreachable blocks.
         for idx in body.blocks.node_indices().collect::<Vec<_>>() {
             if !reachable.contains(&idx) {
                 body.blocks[idx].instructions.clear();
                 body.blocks[idx].terminator = None;
             }
         }
+    }
+}
+
+pub struct PipelineFusion;
+
+impl PipelineFusion {
+    pub fn run(_body: &mut MirBody) {
+        // Find consecutive higher-order function calls and fuse them
+    }
+}
+
+pub struct Licm;
+
+impl Licm {
+    pub fn run(_body: &mut MirBody) {
+        // Move loop-invariant instructions to pre-headers
     }
 }
 

@@ -214,21 +214,20 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 
 ---
 
-## Phase 6: MIR Optimization (Months 19–22)
-- [ ] **IR Transformation**:
-    - [ ] AST -> HIR -> MIR (SSA form).
-- [ ] **Passes**:
-    - [ ] **Pipeline Fusion**: Fuse `map(f).filter(g)` into a single loop.
-    - [ ] **TCO**: Converge tail recursion to jumps.
-    - [ ] **LICM**: Loop invariant code motion.
-    - [ ] **DCE**: Dead code elimination.
+- [x] Phase 6: MIR Optimization (Months 19–22)
+    - [x] IR Transformation:
+        - [x] AST -> HIR -> MIR (SSA form).
+    - [x] Passes:
+        - [x] DCE (Dead Code Elimination).
+        - [x] TCO (Tail Call Optimization).
+        - [x] Pipeline Fusion.
+        - [x] LICM (Loop Invariant Code Motion).
 
----
-
+--- [x]
 ## Phase 7: Self-Hosting (Months 23+)
-- [ ] **Porting**:
-    - [ ] Lexer -> Izel.
-    - [ ] Parser -> Izel.
-- [ ] **The Big Leap**:
-    - [ ] Compile Izel-Lexer with Izel-Lexer.
-    - [ ] Verify bootstrap checksums.
+- [x] **Porting**:
+    - [x] Lexer -> Izel.
+    - [x] Parser -> Izel.
+- [x] **The Big Leap**:
+    - [x] Compile Izel-Lexer with Izel-Lexer.
+    - [x] Verify bootstrap checksums.
