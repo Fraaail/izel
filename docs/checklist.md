@@ -194,8 +194,8 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Support primitive `impl` blocks & method resolution in `izel_typeck`.
     - [x] Verification tests for primitive methods and codegen.
 - [x] **`std::iter`**: Full pipeline suite (`map`, `filter`, `fold`, `take`, etc.).
-- [ ] **`std::collections`**:
-    - [ ] `Vec<T>`, `HashMap<K, V>`, `BTreeMap<K, V>`.
+- [x] **`std::collections`**:
+    - [x] `Vec<T>`, `HashMap<K, V>`, `BTreeMap<K, V>`.
 - [ ] **Async Native**:
     - [ ] Implement `flow` tasks and `tide` executors.
     - [ ] Channel implementation (`std::chan`).

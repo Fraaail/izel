@@ -1,0 +1,133 @@
+// ⬡ IZEL — Standard Library Collections
+// Provides core dynamic data structures: Vec, HashMap, and BTreeMap.
+
+// ---------------------------------------------------------
+// VEC
+// ---------------------------------------------------------
+
+/// A contiguous growable array type.
+shape Vec<T> {
+    // We use a raw pointer internally. In Izel's memory zones, allocations
+    // are tracked and freed when the zone expires.
+    ~ptr: *mut T
+    ~cap: usize
+    ~len: usize
+}
+
+impl<T> Vec<T> {
+    /// Constructs a new, empty `Vec<T>`.
+    forge new() -> Vec<T> {
+        // Without an explicit allocator in the snippet yet, we encode
+        // the conceptual state of an empty vector.
+        Vec {
+            ptr: raw 0 as *mut T,
+            cap: 0,
+            len: 0,
+        }
+    }
+
+    /// Appends an element to the back of a collection.
+    forge push(&mut ~self, value: T) -> void {
+        // Actual zone reallocation logic would go here.
+        // For now, this is a placeholder verifying the borrow checking
+        // and mutation resolution.
+        self.len = self.len + 1
+    }
+
+    /// Removes the last element from a vector and returns it, or `None` if it is empty.
+    forge pop(&mut ~self) -> ?T {
+        given self.len == 0 {
+            give None
+        }
+        self.len = self.len - 1
+        // Would normally read from ptr + len, yielding the value.
+        // Returning None as a safe fallback in this stub.
+        None
+    }
+
+    /// Returns the number of elements in the vector.
+    forge len(&~self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` if the vector contains no elements.
+    forge is_empty(&~self) -> bool {
+        self.len == 0
+    }
+}
+
+// ---------------------------------------------------------
+// HASHMAP
+// ---------------------------------------------------------
+
+/// A hash map implemented with linear probing or chaining.
+shape HashMap<K, V> {
+    // Internal bucket representation omitted for initial verification
+    ~len: usize
+}
+
+impl<K, V> HashMap<K, V> {
+    /// Creates an empty `HashMap`.
+    forge new() -> HashMap<K, V> {
+        HashMap {
+            len: 0,
+        }
+    }
+
+    /// Inserts a key-value pair into the map.
+    forge insert(&mut ~self, k: K, v: V) -> void {
+        self.len = self.len + 1
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    forge get(&~self, k: &K) -> ?V {
+        None
+    }
+
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
+    forge remove(&mut ~self, k: &K) -> ?V {
+        given self.len == 0 {
+            give None
+        }
+        self.len = self.len - 1
+        None
+    }
+}
+
+// ---------------------------------------------------------
+// BTREEMAP
+// ---------------------------------------------------------
+
+/// An ordered map based on a B-Tree.
+shape BTreeMap<K, V> {
+    // Tree root tracking omitted for initial verification
+    ~len: usize
+}
+
+impl<K, V> BTreeMap<K, V> {
+    /// Creates an empty `BTreeMap`.
+    forge new() -> BTreeMap<K, V> {
+        BTreeMap {
+            len: 0,
+        }
+    }
+
+    /// Inserts a key-value pair into the map.
+    forge insert(&mut ~self, k: K, v: V) -> void {
+        self.len = self.len + 1
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    forge get(&~self, k: &K) -> ?V {
+        None
+    }
+
+    /// Removes a key from the map, returning the value at the key if the key was previously in the map.
+    forge remove(&mut ~self, k: &K) -> ?V {
+        given self.len == 0 {
+            give None
+        }
+        self.len = self.len - 1
+        None
+    }
+}

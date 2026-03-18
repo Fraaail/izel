@@ -1,0 +1,22 @@
+// ⬡ IZEL — Collections Test
+// Verifies Vec, HashMap, and BTreeMap stubs.
+
+draw std::collections::*
+
+forge main() {
+    let mut v = Vec::new()
+    v.push(10)
+    v.push(20)
+    
+    let is_empty = v.is_empty()
+    let len = v.len()
+    let val = v.pop()
+
+    let mut map = HashMap::new()
+    map.insert("hello", 42)
+    let mval = map.get(&"hello")
+
+    let mut btree = BTreeMap::new()
+    btree.insert(100, "world")
+    let bval = btree.remove(&100)
+}
