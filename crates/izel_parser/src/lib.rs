@@ -9,13 +9,14 @@ use crate::expr::Precedence;
 use izel_lexer::{Token, TokenKind};
 
 pub struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+    pub tokens: Vec<Token>,
+    pub pos: usize,
+    pub source: String,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, source: String::new() }
     }
 
     /// Parses the entire token stream into a SourceFile CST node.

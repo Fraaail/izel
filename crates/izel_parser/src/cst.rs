@@ -54,6 +54,8 @@ pub enum NodeKind {
     PathExpr,
     StructLiteral,
     MemberExpr,
+    CascadeExpr,
+    MacroCall,
 
     // Trivia & Tokens in CST
     Token(TokenKind),

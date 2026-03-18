@@ -170,6 +170,10 @@ pub enum Expr {
         name: String,
         body: Block,
     },
+    Cascade {
+        expr: Box<Expr>,
+        context: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone)]

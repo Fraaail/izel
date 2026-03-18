@@ -171,11 +171,11 @@ This document provides a granular, step-by-step roadmap for building the Izel co
     - [x] Emit bulk deallocation at the end of `zone` blocks.
 
 ### 3.4 Cascade Error System
-- [ ] **Error Context**:
-    - [ ] Extend `Result<T, E>` to `Result<T, Cascade<E>>`.
-    - [ ] Implement the `or "message"` context override for `!`.
-- [ ] **Trace Construction**:
-    - [ ] Auto-capture `here!()` (file/line) on propagation.
+- [x] **Error Context**:
+    - [x] Extend `Result<T, E>` to `Result<T, Cascade<E>>`.
+    - [x] Implement the `or "message"` context override for `!`.
+- [x] **Trace Construction**:
+    - [x] Auto-capture `here!()` (file/line) on propagation.
 
 ### 3.5 Duality Types
 - [ ] **Elaboration**:

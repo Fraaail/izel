@@ -369,6 +369,46 @@ impl MirLowerer {
                     .push(instr);
                 Rvalue::Use(Operand::Constant(Constant::Int(0)))
             }
+            ast::Expr::Cascade { expr, context: _ } => {
+                let res_rv = self.lower_expr(expr);
+                let res_op = self.rvalue_to_operand(res_rv);
+
+                // For cascade `expr!`, we essentially want:
+                // match expr {
+                //    Ok(v) => v,
+                //    Err(e) => return Err(e),
+                // }
+                // In MIR, since we don't have full ADTs represented structurally yet,
+                // we'll emit a dummy switch that simulates this. A `SwitchInt` on 
+                // discriminant where 1 = Ok and 0 = Err.
+
+                // In a true implementation, we'd extract the discriminant:
+                // let disc = discriminant(res_op);
+                // switchInt(disc) -> [1: ok_block, otherwise: err_block]
+
+                let ok_block = self.body.blocks.add_node(BasicBlock {
+                    instructions: Vec::new(),
+                    terminator: None,
+                });
+                
+                let err_block = self.body.blocks.add_node(BasicBlock {
+                    instructions: Vec::new(),
+                    terminator: Some(Terminator::Return), // return early on error
+                });
+
+                // Simulate discriminant switch (simplified)
+                self.body
+                    .blocks
+                    .node_weight_mut(self.current_block)
+                    .unwrap()
+                    .terminator = Some(Terminator::SwitchInt(res_op, vec![(1, ok_block)], err_block));
+
+                // On Ok branch, we continue Execution and the value would ostensibly 
+                // be stripped of the Result wrapper. For our minimal MIR, we just
+                // return 0 for now as dummy.
+                self.current_block = ok_block;
+                Rvalue::Use(Operand::Constant(Constant::Int(0)))
+            }
             _ => Rvalue::Use(Operand::Constant(Constant::Int(0))),
         }
     }

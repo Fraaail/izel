@@ -1086,6 +1086,26 @@ impl TypeChecker {
                 }
                 Type::Error
             }
+            ast::Expr::Cascade { expr, context } => {
+                let inner_ty = self.infer_expr(expr);
+                
+                // For simplicity now, we assume Result<T, E> is structured such that
+                // unwrapping via `!` provides the Ok type `T`. We'll use a type variable for T
+                // and unify. In a full system, we might look up the Result ADT specifically.
+                let ok_ty = self.new_var();
+                let err_ty = self.new_var();
+                
+                // If it is an ADT, we can't easily unify without knowing Result's DefId,
+                // but we can at least return Ok. For now, we'll return a new var.
+                // Ideally: unify inner_ty with Result<ok_ty, err_ty>
+                
+                if let Some(ctx) = context {
+                    let ctx_ty = self.infer_expr(ctx);
+                    self.unify(&ctx_ty, &Type::Prim(PrimType::Str));
+                }
+                
+                ok_ty // Returns T
+            }
             ast::Expr::Zone { name, body } => {
                 self.push_scope();
                 // Bind `<name>::allocator()` equivalent.
