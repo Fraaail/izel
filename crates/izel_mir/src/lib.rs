@@ -6,6 +6,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 pub type BlockId = NodeIndex;
 
 pub mod lower;
+pub mod optim;
 
 use izel_typeck::type_system::Type;
 
@@ -27,8 +28,9 @@ pub struct BasicBlock {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Assign(Place, Rvalue),
-    Call(Place, String, Vec<Operand>),
+    Assign(Local, Rvalue),
+    Phi(Local, Vec<(BlockId, Local)>),
+    Call(Local, String, Vec<Operand>),
     StorageLive(Local),
     StorageDead(Local),
     /// Runtime contract assertion: if operand is false, abort with message.
@@ -61,13 +63,13 @@ pub enum Rvalue {
     Use(Operand),
     BinaryOp(BinOp, Operand, Operand),
     UnaryOp(UnOp, Operand),
-    Ref(Place, bool), // bool is mut
+    Ref(Local, bool), // bool is mut
 }
 
 #[derive(Debug, Clone)]
 pub enum Operand {
-    Copy(Place),
-    Move(Place),
+    Copy(Local),
+    Move(Local),
     Constant(Constant),
 }
 

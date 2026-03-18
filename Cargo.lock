@@ -563,6 +563,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "izel_hir"
+version = "0.1.0"
+dependencies = [
+ "izel_ast_lower",
+ "izel_lexer",
+ "izel_parser",
+ "izel_resolve",
+ "izel_span",
+ "izel_typeck",
+ "serde",
+]
+
+[[package]]
 name = "izel_lexer"
 version = "0.1.0"
 dependencies = [
@@ -594,8 +607,10 @@ name = "izel_mir"
 version = "0.1.0"
 dependencies = [
  "indexmap",
+ "izel_hir",
  "izel_lexer",
  "izel_parser",
+ "izel_resolve",
  "izel_span",
  "izel_typeck",
  "petgraph",

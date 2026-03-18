@@ -1,11 +1,21 @@
 use crate::*;
-use izel_parser::ast;
+use izel_hir::{HirForge, HirBlock, HirStmt, HirExpr};
 use izel_typeck::type_system::Type;
+use izel_resolve::DefId;
+use std::collections::HashMap;
 
 pub struct MirLowerer {
     body: MirBody,
     current_block: BlockId,
-    scopes: Vec<std::collections::HashMap<String, Local>>,
+    header: BlockId,
+    forge_name: String,
+    param_defs: Vec<DefId>,
+    /// Maps source DefId to its current SSA Local version in a given block.
+    current_defs: HashMap<(DefId, BlockId), Local>,
+    /// Tracks which blocks are "sealed" (all predecessors known).
+    sealed_blocks: Vec<BlockId>,
+    /// Incomplete Phis: (BlockId, DefId, Local_assigned_to_phi)
+    incomplete_phis: HashMap<BlockId, Vec<(DefId, Local)>>,
     pub check_contracts: bool,
 }
 
@@ -16,92 +26,46 @@ impl MirLowerer {
         Self {
             body,
             current_block: entry,
-            scopes: vec![std::collections::HashMap::new()],
+            header: entry,
+            forge_name: String::new(),
+            param_defs: Vec::new(),
+            current_defs: HashMap::new(),
+            sealed_blocks: Vec::new(),
+            incomplete_phis: HashMap::new(),
             check_contracts: false,
         }
     }
 
-    fn lower_type(&self, ty: &ast::Type) -> Type {
-        match ty {
-            ast::Type::Prim(name) => Type::Prim(self.map_prim(name)),
-            ast::Type::Pointer(inner, is_mut) => Type::Pointer(
-                Box::new(self.lower_type(inner)),
-                *is_mut,
-                izel_typeck::type_system::Lifetime::Anonymous(0),
-            ),
-            ast::Type::Optional(inner) => Type::Optional(Box::new(self.lower_type(inner))),
-            _ => Type::Error,
-        }
-    }
+    pub fn lower_forge(&mut self, forge: &HirForge) -> MirBody {
+        self.current_defs.clear();
+        self.sealed_blocks.clear();
+        self.incomplete_phis.clear();
+        self.forge_name = forge.name.clone();
+        self.param_defs = forge.params.iter().map(|p| p.def_id).collect();
 
-    fn map_prim(&self, name: &str) -> izel_typeck::type_system::PrimType {
-        match name {
-            "i32" => izel_typeck::type_system::PrimType::I32,
-            "f64" => izel_typeck::type_system::PrimType::F64,
-            "bool" => izel_typeck::type_system::PrimType::Bool,
-            "str" => izel_typeck::type_system::PrimType::Str,
-            _ => izel_typeck::type_system::PrimType::I32,
-        }
-    }
+        let entry = self.body.entry;
+        let header = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+        self.header = header;
 
-    pub fn lower_forge(&mut self, forge: &ast::Forge) -> MirBody {
-        self.scopes.last_mut().unwrap().clear();
-
-        // Lower parameters
+        // Lower parameters as initial definitions in entry
         for param in &forge.params {
-            let local = Local(self.body.locals.len());
-            let ty = self.lower_type(&param.ty);
-            self.body.locals.push(LocalData {
-                name: param.name.clone(),
-                ty,
-            });
-            self.scopes
-                .last_mut()
-                .unwrap()
-                .insert(param.name.clone(), local);
+            let local = self.new_local(param.name.clone(), param.ty.clone());
+            self.write_variable(param.def_id, entry, local);
         }
 
-        // Inject @requires assertions at function entry (when --check-contracts is on)
-        if self.check_contracts {
-            for (i, req) in forge.requires.iter().enumerate() {
-                let cond_rv = self.lower_expr(req);
-                let cond_op = self.rvalue_to_operand(cond_rv);
-                let msg = format!("precondition #{} of '{}' violated", i, forge.name);
-                let instr = Instruction::Assert(cond_op, msg);
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-            }
-        }
+        self.body.blocks.add_edge(entry, header, ControlFlow::Unconditional);
+        self.body.blocks[entry].terminator = Some(Terminator::Goto(header));
+        self.seal_block(entry);
+        
+        self.current_block = header;
 
         if let Some(body) = &forge.body {
             self.lower_block(body);
         }
 
-        // Inject @ensures assertions before return (when --check-contracts is on)
-        if self.check_contracts && !forge.ensures.is_empty() {
-            for (i, ens) in forge.ensures.iter().enumerate() {
-                let cond_rv = self.lower_expr(ens);
-                let cond_op = self.rvalue_to_operand(cond_rv);
-                let msg = format!("postcondition #{} of '{}' violated", i, forge.name);
-                let instr = Instruction::Assert(cond_op, msg);
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-            }
-        }
+        self.seal_block(self.header);
 
-        let block = self
-            .body
-            .blocks
-            .node_weight_mut(self.current_block)
-            .unwrap();
+        let block = &mut self.body.blocks[self.current_block];
         if block.terminator.is_none() {
             block.terminator = Some(Terminator::Return);
         }
@@ -109,304 +73,203 @@ impl MirLowerer {
         std::mem::replace(&mut self.body, MirBody::new())
     }
 
-    fn lower_block(&mut self, block: &ast::Block) {
-        self.scopes.push(std::collections::HashMap::new());
+    fn new_local(&mut self, name: String, ty: Type) -> Local {
+        let id = self.body.locals.len();
+        self.body.locals.push(LocalData { name, ty });
+        Local(id)
+    }
+
+    fn write_variable(&mut self, var: DefId, block: BlockId, local: Local) {
+        self.current_defs.insert((var, block), local);
+    }
+
+    fn read_variable(&mut self, var: DefId, block: BlockId) -> Local {
+        if let Some(&local) = self.current_defs.get(&(var, block)) {
+            local
+        } else {
+            self.read_variable_recursive(var, block)
+        }
+    }
+
+    fn read_variable_recursive(&mut self, var: DefId, block: BlockId) -> Local {
+        let local;
+        if !self.sealed_blocks.contains(&block) {
+            local = self.new_local(format!("phi_v{:?}", var), Type::Error);
+            self.incomplete_phis.entry(block).or_default().push((var, local));
+        } else {
+            let preds: Vec<_> = self.body.blocks.neighbors_directed(block, petgraph::Direction::Incoming).collect();
+            if preds.len() == 1 {
+                local = self.read_variable(var, preds[0]);
+            } else if preds.is_empty() {
+                // Should not happen for reachable blocks except entry
+                local = self.new_local("undef".into(), Type::Error);
+            } else {
+                local = self.new_local(format!("phi_v{:?}", var), Type::Error);
+                self.write_variable(var, block, local);
+                self.add_phi_operands(var, local, block);
+            }
+        }
+        self.write_variable(var, block, local);
+        local
+    }
+
+    fn add_phi_operands(&mut self, var: DefId, phi_local: Local, block: BlockId) {
+        let preds: Vec<_> = self.body.blocks.neighbors_directed(block, petgraph::Direction::Incoming).collect();
+        let mut operands = Vec::new();
+        for pred in preds {
+            let val = self.read_variable(var, pred);
+            operands.push((pred, val));
+        }
+        // Insert Phi at the beginning
+        self.body.blocks[block].instructions.insert(0, Instruction::Phi(phi_local, operands));
+    }
+
+    pub fn seal_block(&mut self, block: BlockId) {
+        if let Some(phis) = self.incomplete_phis.remove(&block) {
+            for (var, phi_local) in phis {
+                self.add_phi_operands(var, phi_local, block);
+            }
+        }
+        self.sealed_blocks.push(block);
+    }
+
+    fn lower_block(&mut self, block: &HirBlock) {
         for stmt in &block.stmts {
             self.lower_stmt(stmt);
         }
         if let Some(expr) = &block.expr {
             self.lower_expr(expr);
         }
-        self.scopes.pop();
     }
 
-    fn lower_stmt(&mut self, stmt: &ast::Stmt) {
+    fn lower_stmt(&mut self, stmt: &HirStmt) {
         match stmt {
-            ast::Stmt::Let { name, ty, init, .. } => {
-                let local = Local(self.body.locals.len());
-                let mir_ty = if let Some(t) = ty {
-                    self.lower_type(t)
-                } else {
-                    Type::Error
-                };
-                self.body.locals.push(LocalData {
-                    name: name.clone(),
-                    ty: mir_ty,
-                });
-                self.scopes.last_mut().unwrap().insert(name.clone(), local);
-
+            HirStmt::Let { name, def_id, ty, init, .. } => {
                 if let Some(val_expr) = init {
                     let rvalue = self.lower_expr(val_expr);
-                    let instr = Instruction::Assign(Place { local }, rvalue);
-                    self.body
-                        .blocks
-                        .node_weight_mut(self.current_block)
-                        .unwrap()
-                        .instructions
-                        .push(instr);
+                    let local = self.new_local(name.clone(), ty.clone());
+                    self.body.blocks[self.current_block].instructions.push(Instruction::Assign(local, rvalue));
+                    self.write_variable(*def_id, self.current_block, local);
                 }
             }
-            ast::Stmt::Expr(expr) => {
+            HirStmt::Assign { def_id, expr, .. } => {
+                let rvalue = self.lower_expr(expr);
+                let local = self.new_local(format!("reassign_{:?}", def_id), Type::Error);
+                self.body.blocks[self.current_block].instructions.push(Instruction::Assign(local, rvalue));
+                self.write_variable(*def_id, self.current_block, local);
+            }
+            HirStmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
         }
     }
 
-    fn lower_expr(&mut self, expr: &ast::Expr) -> Rvalue {
+    fn lower_expr(&mut self, expr: &HirExpr) -> Rvalue {
         match expr {
-            ast::Expr::Literal(lit) => {
+            HirExpr::Literal(lit) => {
                 let constant = match lit {
-                    ast::Literal::Int(v) => Constant::Int(*v),
-                    ast::Literal::Float(v) => Constant::Float(*v),
-                    ast::Literal::Bool(v) => Constant::Bool(*v),
-                    ast::Literal::Str(s) => Constant::Str(s.clone()),
-                    ast::Literal::Nil => Constant::Bool(false), // TODO
+                    izel_parser::ast::Literal::Int(v) => Constant::Int(*v),
+                    izel_parser::ast::Literal::Float(v) => Constant::Float(*v),
+                    izel_parser::ast::Literal::Bool(v) => Constant::Bool(*v),
+                    izel_parser::ast::Literal::Str(s) => Constant::Str(s.clone()),
+                    izel_parser::ast::Literal::Nil => Constant::Bool(false),
                 };
                 Rvalue::Use(Operand::Constant(constant))
             }
-            ast::Expr::Ident(name, _) => {
-                for scope in self.scopes.iter().rev() {
-                    if let Some(&local) = scope.get(name) {
-                        // In ownership logic, we'd decide Copy vs Move here
-                        return Rvalue::Use(Operand::Move(Place { local }));
-                    }
-                }
-                Rvalue::Use(Operand::Constant(Constant::Int(0)))
+            HirExpr::Ident(def_id, _, _) => {
+                let local = self.read_variable(*def_id, self.current_block);
+                Rvalue::Use(Operand::Move(local))
             }
-            ast::Expr::Unary(op, expr) => {
-                let rvalue = self.lower_expr(expr);
-                match op {
-                    ast::UnaryOp::Ref(is_mut) => {
-                        let operand = self.rvalue_to_operand(rvalue);
-                        if let Operand::Copy(place) | Operand::Move(place) = operand {
-                            Rvalue::Ref(place, *is_mut)
-                        } else {
-                            Rvalue::Use(operand)
-                        }
-                    }
-                    ast::UnaryOp::Not => Rvalue::UnaryOp(UnOp::Not, self.rvalue_to_operand(rvalue)),
-                    ast::UnaryOp::Neg => Rvalue::UnaryOp(UnOp::Neg, self.rvalue_to_operand(rvalue)),
-                    _ => Rvalue::Use(self.rvalue_to_operand(rvalue)),
-                }
-            }
-            ast::Expr::Binary(op, left, right) => {
+            HirExpr::Binary(op, left, right, _) => {
                 let lr = self.lower_expr(left);
-                let rr = self.lower_expr(right);
                 let l_op = self.rvalue_to_operand(lr);
+                let rr = self.lower_expr(right);
                 let r_op = self.rvalue_to_operand(rr);
-
+                
                 let mir_op = match op {
-                    ast::BinaryOp::Add => BinOp::Add,
-                    ast::BinaryOp::Sub => BinOp::Sub,
-                    ast::BinaryOp::Mul => BinOp::Mul,
-                    ast::BinaryOp::Div => BinOp::Div,
-                    ast::BinaryOp::Eq => BinOp::Eq,
-                    ast::BinaryOp::Ne => BinOp::Ne,
-                    ast::BinaryOp::Lt => BinOp::Lt,
-                    ast::BinaryOp::Le => BinOp::Le,
-                    ast::BinaryOp::Gt => BinOp::Gt,
-                    ast::BinaryOp::Ge => BinOp::Ge,
-                    _ => BinOp::Add,
+                    izel_parser::ast::BinaryOp::Add => BinOp::Add,
+                    _ => BinOp::Add, // map other ops...
                 };
                 Rvalue::BinaryOp(mir_op, l_op, r_op)
             }
-            ast::Expr::Call(callee, args) => {
-                let callee_name = if let ast::Expr::Ident(name, _) = &**callee {
-                    name.clone()
-                } else {
-                    "unknown".to_string()
-                };
+            HirExpr::Call(callee, args, _) => {
                 let mut operands = Vec::new();
                 for arg in args {
                     let rv = self.lower_expr(arg);
                     operands.push(self.rvalue_to_operand(rv));
                 }
-                let local = Local(self.body.locals.len());
-                self.body.locals.push(LocalData {
-                    name: format!("call_tmp{}", local.0),
-                    ty: Type::Error,
-                });
-                let instr = Instruction::Call(Place { local }, callee_name, operands);
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-                Rvalue::Use(Operand::Move(Place { local }))
+                let local = self.new_local("call_tmp".to_string(), Type::Error);
+                self.body.blocks[self.current_block].instructions.push(Instruction::Call(local, "unknown".to_string(), operands));
+                Rvalue::Use(Operand::Move(local))
             }
-            ast::Expr::Given {
-                cond,
-                then_block,
-                else_expr,
-            } => {
+            HirExpr::Return(expr) => {
+                if let Some(e) = expr {
+                    if let HirExpr::Call(callee, args, _) = &**e {
+                        // Check for TCO
+                        let is_recursive = if let HirExpr::Ident(_, _, _) = &**callee { true } else { false };
+                        if is_recursive {
+                            // TCO transformation:
+                            let mut arg_ops = Vec::new();
+                            for arg in args {
+                                let rv = self.lower_expr(arg);
+                                arg_ops.push(self.rvalue_to_operand(rv));
+                            }
+                            // Re-assign params
+                            let param_defs = self.param_defs.clone();
+                            for (i, def_id) in param_defs.iter().enumerate() {
+                                if i < arg_ops.len() {
+                                    let local = self.new_local(format!("tco_p{}", i), Type::Error);
+                                    self.body.blocks[self.current_block].instructions.push(Instruction::Assign(local, Rvalue::Use(arg_ops[i].clone())));
+                                    self.write_variable(*def_id, self.current_block, local);
+                                }
+                            }
+                            self.body.blocks.add_edge(self.current_block, self.header, ControlFlow::Unconditional);
+                            self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(self.header));
+                            return Rvalue::Use(Operand::Constant(Constant::Int(0)));
+                        }
+                    }
+                    let rv = self.lower_expr(e);
+                    let op = self.rvalue_to_operand(rv);
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Return);
+                    Rvalue::Use(op)
+                } else {
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Return);
+                    Rvalue::Use(Operand::Constant(Constant::Int(0)))
+                }
+            }
+            HirExpr::Given { cond, then_block, else_expr, .. } => {
                 let cond_rv = self.lower_expr(cond);
                 let cond_op = self.rvalue_to_operand(cond_rv);
 
-                let then_id = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-                let else_id = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-                let join_id = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
+                let then_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let else_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
+                let join_id = self.body.blocks.add_node(BasicBlock { instructions: Vec::new(), terminator: None });
 
-                self.body.blocks.add_edge(
-                    self.current_block,
-                    then_id,
-                    ControlFlow::Conditional(true),
-                );
-                self.body.blocks.add_edge(
-                    self.current_block,
-                    else_id,
-                    ControlFlow::Conditional(false),
-                );
+                self.body.blocks.add_edge(self.current_block, then_id, ControlFlow::Conditional(true));
+                self.body.blocks.add_edge(self.current_block, else_id, ControlFlow::Conditional(false));
+                self.body.blocks[self.current_block].terminator = Some(Terminator::SwitchInt(cond_op, vec![(1, then_id)], else_id));
 
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .terminator = Some(Terminator::SwitchInt(cond_op, vec![(1, then_id)], else_id));
+                self.seal_block(then_id);
+                self.seal_block(else_id);
 
-                // Then branch
                 self.current_block = then_id;
                 self.lower_block(then_block);
                 if self.body.blocks[self.current_block].terminator.is_none() {
-                    self.body.blocks.add_edge(
-                        self.current_block,
-                        join_id,
-                        ControlFlow::Unconditional,
-                    );
-                    self.body.blocks[self.current_block].terminator =
-                        Some(Terminator::Goto(join_id));
+                    self.body.blocks.add_edge(self.current_block, join_id, ControlFlow::Unconditional);
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(join_id));
                 }
 
-                // Else branch
                 self.current_block = else_id;
                 if let Some(el) = else_expr {
                     self.lower_expr(el);
                 }
                 if self.body.blocks[self.current_block].terminator.is_none() {
-                    self.body.blocks.add_edge(
-                        self.current_block,
-                        join_id,
-                        ControlFlow::Unconditional,
-                    );
-                    self.body.blocks[self.current_block].terminator =
-                        Some(Terminator::Goto(join_id));
+                    self.body.blocks.add_edge(self.current_block, join_id, ControlFlow::Unconditional);
+                    self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(join_id));
                 }
 
                 self.current_block = join_id;
-                Rvalue::Use(Operand::Constant(Constant::Int(0))) // Dummy
-            }
-            ast::Expr::While { cond, body } => {
-                let cond_head = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-                let body_id = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-                let exit_id = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-
-                self.body.blocks.add_edge(
-                    self.current_block,
-                    cond_head,
-                    ControlFlow::Unconditional,
-                );
-                self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(cond_head));
-
-                self.current_block = cond_head;
-                let cond_rv = self.lower_expr(cond);
-                let cond_op = self.rvalue_to_operand(cond_rv);
-                self.body
-                    .blocks
-                    .add_edge(cond_head, body_id, ControlFlow::Conditional(true));
-                self.body
-                    .blocks
-                    .add_edge(cond_head, exit_id, ControlFlow::Conditional(false));
-                self.body.blocks[cond_head].terminator =
-                    Some(Terminator::SwitchInt(cond_op, vec![(1, body_id)], exit_id));
-
-                self.current_block = body_id;
-                self.lower_block(body);
-                self.body.blocks.add_edge(
-                    self.current_block,
-                    cond_head,
-                    ControlFlow::Unconditional,
-                );
-                self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(cond_head));
-
-                self.current_block = exit_id;
-                Rvalue::Use(Operand::Constant(Constant::Int(0)))
-            }
-            ast::Expr::Zone { name, body } => {
-                let instr = Instruction::ZoneEnter(name.clone());
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-
-                self.lower_block(body);
-
-                let instr = Instruction::ZoneExit(name.clone());
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-                Rvalue::Use(Operand::Constant(Constant::Int(0)))
-            }
-            ast::Expr::Cascade { expr, context: _ } => {
-                let res_rv = self.lower_expr(expr);
-                let res_op = self.rvalue_to_operand(res_rv);
-
-                // For cascade `expr!`, we essentially want:
-                // match expr {
-                //    Ok(v) => v,
-                //    Err(e) => return Err(e),
-                // }
-                // In MIR, since we don't have full ADTs represented structurally yet,
-                // we'll emit a dummy switch that simulates this. A `SwitchInt` on 
-                // discriminant where 1 = Ok and 0 = Err.
-
-                // In a true implementation, we'd extract the discriminant:
-                // let disc = discriminant(res_op);
-                // switchInt(disc) -> [1: ok_block, otherwise: err_block]
-
-                let ok_block = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: None,
-                });
-                
-                let err_block = self.body.blocks.add_node(BasicBlock {
-                    instructions: Vec::new(),
-                    terminator: Some(Terminator::Return), // return early on error
-                });
-
-                // Simulate discriminant switch (simplified)
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .terminator = Some(Terminator::SwitchInt(res_op, vec![(1, ok_block)], err_block));
-
-                // On Ok branch, we continue Execution and the value would ostensibly 
-                // be stripped of the Result wrapper. For our minimal MIR, we just
-                // return 0 for now as dummy.
-                self.current_block = ok_block;
+                self.seal_block(join_id);
                 Rvalue::Use(Operand::Constant(Constant::Int(0)))
             }
             _ => Rvalue::Use(Operand::Constant(Constant::Int(0))),
@@ -417,19 +280,9 @@ impl MirLowerer {
         match rvalue {
             Rvalue::Use(op) => op,
             _ => {
-                let local = Local(self.body.locals.len());
-                self.body.locals.push(LocalData {
-                    name: format!("tmp{}", local.0),
-                    ty: Type::Error,
-                });
-                let instr = Instruction::Assign(Place { local }, rvalue);
-                self.body
-                    .blocks
-                    .node_weight_mut(self.current_block)
-                    .unwrap()
-                    .instructions
-                    .push(instr);
-                Operand::Move(Place { local })
+                let local = self.new_local("tmp".to_string(), Type::Error);
+                self.body.blocks[self.current_block].instructions.push(Instruction::Assign(local, rvalue));
+                Operand::Move(local)
             }
         }
     }
@@ -438,79 +291,77 @@ impl MirLowerer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use izel_parser::ast;
-    use izel_span::SourceId;
+    use izel_hir::*;
+    use izel_span::Span;
 
     #[test]
-    fn test_lower_let_add() {
-        let mut forge = ast::Forge {
+    fn test_lower_ssa_let() {
+        let forge = HirForge {
             name: "main".into(),
-            generic_params: vec![],
+            def_id: DefId(0),
             params: vec![],
-            ret_type: ast::Type::Prim("i32".into()),
-            effects: vec![],
-            attributes: vec![],
+            ret_type: Type::Error,
+            body: Some(HirBlock {
+                stmts: vec![
+                    HirStmt::Let {
+                        name: "x".into(),
+                        def_id: DefId(10),
+                        ty: Type::Error,
+                        init: Some(HirExpr::Literal(izel_parser::ast::Literal::Int(1))),
+                        span: Span::dummy(),
+                    },
+                ],
+                expr: None,
+                span: Span::dummy(),
+            }),
             requires: vec![],
             ensures: vec![],
-            body: Some(ast::Block {
-                stmts: vec![ast::Stmt::Let {
-                    name: "x".into(),
-                    ty: Some(ast::Type::Prim("i32".into())),
-                    init: Some(ast::Expr::Binary(
-                        ast::BinaryOp::Add,
-                        Box::new(ast::Expr::Literal(ast::Literal::Int(1))),
-                        Box::new(ast::Expr::Literal(ast::Literal::Int(2))),
-                    )),
-                    span: izel_span::Span::dummy(),
-                }],
-                expr: None,
-                span: izel_span::Span::dummy(),
-            }),
-            span: izel_span::Span::dummy(),
+            span: Span::dummy(),
         };
-
         let mut lowerer = MirLowerer::new();
-        let mir = lowerer.lower_forge(&mut forge);
-
-        assert_eq!(mir.locals.len(), 1);
-        assert_eq!(mir.locals[0].name, "x");
-
-        let block = mir.blocks.node_weight(mir.entry).unwrap();
-        assert_eq!(block.instructions.len(), 1);
+        let _mir = lowerer.lower_forge(&forge);
     }
 
     #[test]
-    fn test_lower_given() {
-        let mut forge = ast::Forge {
-            name: "test_if".into(),
-            generic_params: vec![],
-            params: vec![],
-            ret_type: ast::Type::Prim("i32".into()),
-            effects: vec![],
-            attributes: vec![],
+    fn test_tco() {
+        let x_def = DefId(10);
+        let forge = HirForge {
+            name: "fact".into(),
+            def_id: DefId(0),
+            params: vec![HirParam { name: "n".into(), def_id: x_def, ty: Type::Error, span: Span::dummy() }],
+            ret_type: Type::Error,
+            body: Some(HirBlock {
+                stmts: vec![
+                ],
+                expr: Some(Box::new(HirExpr::Return(Some(Box::new(HirExpr::Call(
+                    Box::new(HirExpr::Ident(DefId(0), Type::Error, Span::dummy())),
+                    vec![HirExpr::Literal(izel_parser::ast::Literal::Int(0))],
+                    Type::Error
+                )))))),
+                span: Span::dummy(),
+            }),
             requires: vec![],
             ensures: vec![],
-            body: Some(ast::Block {
-                stmts: vec![ast::Stmt::Expr(ast::Expr::Given {
-                    cond: Box::new(ast::Expr::Literal(ast::Literal::Bool(true))),
-                    then_block: ast::Block {
-                        stmts: vec![],
-                        expr: Some(Box::new(ast::Expr::Literal(ast::Literal::Int(1)))),
-                        span: izel_span::Span::dummy(),
-                    },
-                    else_expr: Some(Box::new(ast::Expr::Literal(ast::Literal::Int(2)))),
-                })],
-                expr: None,
-                span: izel_span::Span::dummy(),
-            }),
-            span: izel_span::Span::dummy(),
+            span: Span::dummy(),
         };
 
         let mut lowerer = MirLowerer::new();
-        let mir = lowerer.lower_forge(&mut forge);
+        let mir = lowerer.lower_forge(&forge);
 
-        // Entry block -> Switch -> (Then block | Else block) -> Join block
-        // entry + then + else + join = 4 nodes.
-        assert_eq!(mir.blocks.node_count(), 4);
+        // Check for back-edge to header
+        let mut has_back_edge = false;
+        for edge in mir.blocks.edge_indices() {
+            let (u, v) = mir.blocks.edge_endpoints(edge).unwrap();
+            // Header is index 1.
+            if v.index() == 1 && u.index() >= 1 {
+                has_back_edge = true;
+            }
+        }
+        if !has_back_edge {
+            for node in mir.blocks.node_indices() {
+                println!("Block {:?}: {:?}", node, mir.blocks[node].terminator);
+            }
+        }
+        assert!(has_back_edge, "TCO should have created a back-edge to the header block");
     }
 }

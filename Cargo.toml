@@ -15,6 +15,7 @@ members = [
     "crates/izel_fmt",
     "crates/izel_lsp",
     "crates/izel_pm",
+    "crates/izel_hir",
 ]
 
 [workspace.package]
@@ -60,3 +61,4 @@ izel_borrow = { path = "crates/izel_borrow" }
 izel_fmt = { path = "crates/izel_fmt" }
 izel_lsp = { path = "crates/izel_lsp" }
 izel_pm = { path = "crates/izel_pm" }
+izel_hir = { path = "crates/izel_hir" }

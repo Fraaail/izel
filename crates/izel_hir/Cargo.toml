@@ -1,17 +1,17 @@
 [package]
-name = "izel_mir"
+name = "izel_hir"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "High-level Intermediate Representation for Izel."
 
 [dependencies]
+izel_ast_lower = { workspace = true }
 izel_parser = { workspace = true }
+izel_typeck = { workspace = true }
+izel_resolve = { workspace = true }
 izel_span = { workspace = true }
 izel_lexer = { workspace = true }
-izel_typeck = { workspace = true }
-izel_hir = { workspace = true }
-izel_resolve = { workspace = true }
-petgraph = "0.6"
-indexmap = { workspace = true }
+serde = { workspace = true }

@@ -203,13 +203,14 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 ---
 
 ## Phase 5: Developer Tooling (Months 16–18)
-- [ ] **`izel-fmt`**: Lossless CST-based deterministic formatter.
-- [ ] **`izel-lsp`**:
-    - [ ] Implement `tower-lsp` server.
-    - [ ] Hook into `izel_query` (`salsa`) for incremental analysis.
-- [ ] **`izel-pm`**:
-    - [ ] Implement `Izel.toml` parser with `winnow`.
-    - [ ] Build dependency resolver (SemVer).
+### 5.1 `izel-fmt`
+- [x] **`izel-fmt`**: Lossless CST-based deterministic formatter.
+- [x] **`izel-lsp`**:
+    - [x] Implement `tower-lsp` server.
+    - [x] Hook into `izel_query` (`salsa`) for incremental analysis.
+- [x] **`izel-pm`**:
+    - [x] Implement `Izel.toml` parser with `winnow`.
+    - [x] Build dependency resolver (SemVer).
 
 ---
 
