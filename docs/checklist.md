@@ -145,13 +145,13 @@ This document provides a granular, step-by-step roadmap for building the Izel co
 *Goal: The distinguishing features of Izel.*
 
 ### 3.1 Witness Types & Proofs
-- [ ] **System Design**:
-    - [ ] Implement `Witness<P>` as a lang-item.
-    - [ ] Restrict construction to `@proof` tagged functions.
+- [x] **System Design**:
+    - [x] Implement `Witness<P>` as a lang-item.
+    - [x] Restrict construction to `@proof` tagged functions.
 - [ ] **Built-ins**:
     - [ ] Implement `NonZero<T>`, `InBounds<T>`, `Sorted<T>`.
-- [ ] **Verification**:
-    - [ ] Ensure `raw` is the only way to bypass proofs.
+- [x] **Verification**:
+    - [x] Ensure `raw` is the only way to bypass proofs.
 
 ### 3.2 Temporal Constraints (`@requires` / `@ensures`)
 - [ ] **Compile-time Engine**:

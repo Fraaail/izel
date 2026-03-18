@@ -4,8 +4,6 @@ use izel_parser::ast;
 use type_system::{Type, PrimType, Scheme, Effect, EffectSet};
 use izel_resolve::DefId;
 use rustc_hash::FxHashMap;
-use izel_diagnostics::{Diagnostic, primary_label};
-use std::collections::HashMap;
 
 pub use izel_parser::eval::{ConstValue, eval_expr};
 pub use izel_parser::contracts::ContractChecker;
@@ -201,7 +199,7 @@ impl TypeChecker {
     }
 
     fn check_impl(&mut self, i: &ast::Impl) {
-        let target = self.lower_ast_type(&i.target);
+        let _target = self.lower_ast_type(&i.target);
         if let Some(weave_ty) = &i.weave {
              if let ast::Type::Prim(weave_name) = weave_ty {
                  if let Some(w) = self.weaves.get(weave_name).cloned() {
@@ -867,7 +865,7 @@ impl TypeChecker {
                 self.check_block(block);
                 Type::Prim(PrimType::Void)
             }
-            ast::Expr::While { cond, body } => {
+            ast::Expr::While { cond: _, body } => {
                 self.check_block(body);
                 Type::Prim(PrimType::Void)
             }

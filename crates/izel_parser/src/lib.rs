@@ -105,37 +105,6 @@ impl Parser {
         SyntaxNode::new(NodeKind::TypeAlias, children)
     }
 
-    fn parse_impl_after_keyword(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
-        children.extend(self.eat_trivia().into_iter());
-        // Simple impl parsing logic
-        while self.current_kind() != TokenKind::OpenParen && self.current_kind() != TokenKind::OpenBrace && self.current_kind() != TokenKind::Eof {
-             let mut moved = false;
-             match self.current_kind() {
-                 TokenKind::Ident | TokenKind::For | TokenKind::As => { 
-                     children.push(SyntaxElement::Token(self.bump())); 
-                     moved = true;
-                 }
-                 _ => { 
-                     let start = self.pos;
-                     children.push(SyntaxElement::Node(self.parse_type())); 
-                     if self.pos > start { moved = true; }
-                 }
-             }
-             if !moved { self.bump(); } // Safety bump
-             children.extend(self.eat_trivia().into_iter());
-        }
-        if self.current_kind() == TokenKind::OpenBrace {
-            children.push(SyntaxElement::Token(self.bump()));
-            while self.current_kind() != TokenKind::CloseBrace && self.current_kind() != TokenKind::Eof {
-                children.push(SyntaxElement::Node(self.parse_decl()));
-                children.extend(self.eat_trivia().into_iter());
-            }
-            if self.current_kind() == TokenKind::CloseBrace {
-                children.push(SyntaxElement::Token(self.bump()));
-            }
-        }
-        SyntaxNode::new(NodeKind::ImplBlock, children)
-    }
 
     fn parse_forge_after_keyword(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
         children.extend(self.eat_trivia().into_iter());

@@ -110,6 +110,7 @@ impl Resolver {
                     NodeKind::TypeAlias => self.resolve_named_decl(child_node, TokenKind::Type, source),
                     NodeKind::Block => self.resolve_block(child_node, source),
                     NodeKind::LetStmt => self.resolve_let_stmt(child_node, source),
+                    NodeKind::DrawDecl => self.resolve_draw_decl(child_node, source),
                     NodeKind::Ident => {
                          // Resolve use of identifier
                          let span = child_node.span();
@@ -201,7 +202,6 @@ impl Resolver {
                 SyntaxElement::Node(n) => {
                     self.resolve_children(n, source);
                 }
-                _ => {}
             }
         }
     }
