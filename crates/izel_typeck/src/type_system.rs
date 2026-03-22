@@ -90,6 +90,7 @@ pub enum PrimType {
     Str,
     Void,
     None,
+    Never,
     ZoneAllocator,
 }
 

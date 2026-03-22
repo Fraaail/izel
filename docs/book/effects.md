@@ -1,0 +1,3 @@
+# The Effect System
+
+This chapter will overview the Effect system in Izel...

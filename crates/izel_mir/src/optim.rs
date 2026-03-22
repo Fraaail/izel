@@ -115,11 +115,11 @@ fn collect_used_locals_term(term: &Terminator, used: &mut HashSet<Local>) {
 fn collect_used_locals_rvalue(rv: &Rvalue, used: &mut HashSet<Local>) {
     match rv {
         Rvalue::Use(op) => collect_used_locals_operand(op, used),
-        Rvalue::BinaryOp(_, l, r) => {
+        Rvalue::Binary(_, l, r) => {
             collect_used_locals_operand(l, used);
             collect_used_locals_operand(r, used);
         }
-        Rvalue::UnaryOp(_, inner) => collect_used_locals_operand(inner, used),
+        Rvalue::Unary(_, inner) => collect_used_locals_operand(inner, used),
         Rvalue::Ref(local, _) => {
             used.insert(*local);
         }

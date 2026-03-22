@@ -154,6 +154,7 @@ impl<'a> Lowerer<'a> {
     fn lower_forge(&self, node: &SyntaxNode) -> ast::Forge {
         let visibility = self.lower_visibility(node);
         let mut name = String::new();
+        let mut name_span = node.span(); // Default to node span, will be updated if ident found
         let mut is_flow = false;
         let mut params = Vec::new();
         let mut ret_type = ast::Type::Prim("void".to_string());
@@ -174,6 +175,7 @@ impl<'a> Lowerer<'a> {
                 SyntaxElement::Token(token) if self.is_naming_ident(token.kind) => {
                     name =
                         self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
+                    name_span = token.span; // Capture the span of the name token
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::GenericParams => {
                     generic_params = self.lower_generic_params(n);
@@ -216,6 +218,7 @@ impl<'a> Lowerer<'a> {
 
         ast::Forge {
             name,
+            name_span, // Add name_span here
             visibility,
             is_flow,
             generic_params,
@@ -419,6 +422,7 @@ impl<'a> Lowerer<'a> {
         let mut default_value = None;
         let mut is_variadic = false;
 
+        let mut name_span = node.span();
         let mut i = 0;
         while i < node.children.len() {
             match &node.children[i] {
@@ -430,6 +434,7 @@ impl<'a> Lowerer<'a> {
                 {
                     name =
                         self.source[token.span.lo.0 as usize..token.span.hi.0 as usize].to_string();
+                    name_span = token.span;
                 }
                 SyntaxElement::Node(n)
                     if n.kind == NodeKind::Type
@@ -460,7 +465,7 @@ impl<'a> Lowerer<'a> {
             ty,
             default_value,
             is_variadic,
-            span: node.span(),
+            span: name_span,
         }
     }
 
@@ -536,7 +541,10 @@ impl<'a> Lowerer<'a> {
 
         for (i, child) in node.children.iter().enumerate() {
             if let SyntaxElement::Node(n) = child {
-                if Some(i) == last_node_idx && n.kind != NodeKind::LetStmt {
+                if Some(i) == last_node_idx
+                    && n.kind != NodeKind::LetStmt
+                    && n.kind != NodeKind::GiveStmt
+                {
                     let expr_node = if n.kind == NodeKind::ExprStmt {
                         // Extract the inner expression from ExprStmt
                         n.children
@@ -599,6 +607,18 @@ impl<'a> Lowerer<'a> {
                     init,
                     span: node.span(),
                 }
+            }
+            NodeKind::GiveStmt => {
+                let mut expr = None;
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        expr = Some(self.lower_expr(n));
+                        break;
+                    }
+                }
+                ast::Stmt::Expr(ast::Expr::Return(Box::new(
+                    expr.unwrap_or(ast::Expr::Literal(ast::Literal::Nil)),
+                )))
             }
             NodeKind::ExprStmt => {
                 for child in &node.children {
@@ -707,7 +727,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(SyntaxElement::Token(t2)) = children_iter.next() {
                         name =
                             self.source[t2.span.lo.0 as usize..t2.span.hi.0 as usize].to_string();
-                        return ast::Pattern::Ident(name, true);
+                        return ast::Pattern::Ident(name, true, t2.span);
                     }
                 }
                 TokenKind::Int { .. }
@@ -769,10 +789,13 @@ impl<'a> Lowerer<'a> {
                     return ast::Pattern::Slice(slice_pats);
                 }
                 TokenKind::Ident => {
-                    name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                    let ident_span = t.span;
+                    name =
+                        self.source[ident_span.lo.0 as usize..ident_span.hi.0 as usize].to_string();
                     if name == "_" {
                         return ast::Pattern::Wildcard;
                     }
+                    return ast::Pattern::Ident(name, false, ident_span);
                 }
                 _ => {}
             }
@@ -837,7 +860,7 @@ impl<'a> Lowerer<'a> {
         }
 
         if !name.is_empty() {
-            return ast::Pattern::Ident(name, false);
+            return ast::Pattern::Ident(name, false, node.span()); // Default span if no token ident found
         }
 
         ast::Pattern::Wildcard
@@ -1407,14 +1430,14 @@ impl<'a> Lowerer<'a> {
                 ast::Arm {
                     pattern: ast::Pattern::Variant(
                         "Some".to_string(),
-                        vec![ast::Pattern::Ident("v".to_string(), false)],
+                        vec![ast::Pattern::Ident("v".to_string(), false, Span::dummy())],
                     ),
                     guard: None,
                     body: ast::Expr::Ident("v".to_string(), Span::dummy()),
                     span: Span::dummy(),
                 },
                 ast::Arm {
-                    pattern: ast::Pattern::Ident("None".to_string(), false),
+                    pattern: ast::Pattern::Ident("None".to_string(), false, Span::dummy()),
                     guard: None,
                     body: rhs.clone(),
                     span: Span::dummy(),
@@ -1422,7 +1445,7 @@ impl<'a> Lowerer<'a> {
                 ast::Arm {
                     pattern: ast::Pattern::Variant(
                         "Ok".to_string(),
-                        vec![ast::Pattern::Ident("v".to_string(), false)],
+                        vec![ast::Pattern::Ident("v".to_string(), false, Span::dummy())],
                     ),
                     guard: None,
                     body: ast::Expr::Ident("v".to_string(), Span::dummy()),

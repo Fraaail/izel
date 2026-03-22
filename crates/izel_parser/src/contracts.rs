@@ -104,6 +104,7 @@ mod tests {
             ensures: vec![],
             is_flow: false,
             body: None,
+            name_span: Span::dummy(),
             span: Span::dummy(),
         };
 

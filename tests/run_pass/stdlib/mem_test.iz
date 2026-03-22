@@ -1,0 +1,7 @@
+draw std/mem
+
+forge main() -> int {
+    let p = alloc(1024)
+    free(p)
+    give 0
+}

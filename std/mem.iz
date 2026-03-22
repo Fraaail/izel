@@ -1,0 +1,5 @@
+@intrinsic("mem_alloc")
+forge alloc(size: int) -> ptr
+
+@intrinsic("mem_free")
+forge free(p: ptr)

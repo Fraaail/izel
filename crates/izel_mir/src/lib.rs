@@ -10,17 +10,21 @@ pub mod optim;
 
 use izel_typeck::type_system::Type;
 
+#[derive(Debug, Clone)]
 pub struct MirBody {
     pub blocks: DiGraph<BasicBlock, ControlFlow>,
     pub entry: BlockId,
     pub locals: Vec<LocalData>,
+    pub arg_count: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct LocalData {
     pub name: String,
     pub ty: Type,
 }
 
+#[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub instructions: Vec<Instruction>,
     pub terminator: Option<Terminator>,
@@ -30,7 +34,7 @@ pub struct BasicBlock {
 pub enum Instruction {
     Assign(Local, Rvalue),
     Phi(Local, Vec<(BlockId, Local)>),
-    Call(Local, String, Vec<Operand>),
+    Call(Option<Local>, String, Vec<Operand>),
     StorageLive(Local),
     StorageDead(Local),
     /// Runtime contract assertion: if operand is false, abort with message.
@@ -61,8 +65,8 @@ pub struct Place {
 #[derive(Debug, Clone)]
 pub enum Rvalue {
     Use(Operand),
-    BinaryOp(BinOp, Operand, Operand),
-    UnaryOp(UnOp, Operand),
+    Binary(BinOp, Operand, Operand),
+    Unary(UnOp, Operand),
     Ref(Local, bool), // bool is mut
 }
 
@@ -120,10 +124,12 @@ impl MirBody {
             instructions: Vec::new(),
             terminator: None,
         });
+
         Self {
             blocks,
             entry,
             locals: Vec::new(),
+            arg_count: 0,
         }
     }
 }

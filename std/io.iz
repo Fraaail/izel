@@ -1,0 +1,10 @@
+@intrinsic("io_print_int")
+forge print(val: int)
+
+@intrinsic("io_print_newline")
+forge println_newline()
+
+forge println(val: int) {
+    print(val)
+    println_newline()
+}

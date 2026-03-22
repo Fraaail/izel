@@ -52,7 +52,7 @@ fn derive_encode_from_shape(shape: &ast::Shape) -> ast::Forge {
 
     // let raw = JsonObject::new()
     body_stmts.push(ast::Stmt::Let {
-        pat: ast::Pattern::Ident("raw".to_string(), false),
+        pat: ast::Pattern::Ident("raw".to_string(), false, span),
         ty: Some(ast::Type::Prim("JsonValue".to_string())),
         init: Some(ast::Expr::Call(
             Box::new(ast::Expr::Ident("JsonObject::new".to_string(), span)),
@@ -93,6 +93,7 @@ fn derive_encode_from_shape(shape: &ast::Shape) -> ast::Forge {
 
     ast::Forge {
         name: "encode".to_string(),
+        name_span: span,
         visibility: shape.visibility.clone(),
         is_flow: false,
         generic_params: shape.generic_params.clone(),
@@ -125,7 +126,7 @@ fn derive_decode_from_shape(shape: &ast::Shape) -> ast::Forge {
     for field in &shape.fields {
         // let field = raw.get("field").decode()
         body_stmts.push(ast::Stmt::Let {
-            pat: ast::Pattern::Ident(field.name.clone(), false),
+            pat: ast::Pattern::Ident(field.name.clone(), false, span),
             ty: None,
             init: Some(ast::Expr::Call(
                 Box::new(ast::Expr::Member(
@@ -156,6 +157,7 @@ fn derive_decode_from_shape(shape: &ast::Shape) -> ast::Forge {
 
     ast::Forge {
         name: "decode".to_string(),
+        name_span: span,
         visibility: shape.visibility.clone(),
         is_flow: false,
         generic_params: shape.generic_params.clone(),
@@ -191,6 +193,7 @@ fn generate_roundtrip_test(
     let span = encode.span;
     ast::Item::Forge(ast::Forge {
         name: format!("{}_test", shape_name),
+        name_span: span,
         visibility: ast::Visibility::Hidden,
         is_flow: false,
         generic_params: encode.generic_params.clone(),

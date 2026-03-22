@@ -1,0 +1,10 @@
+forge write() !io {
+}
+
+forge save() !io {
+    write()
+}
+
+forge main() !io {
+    save()
+}

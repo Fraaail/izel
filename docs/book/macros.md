@@ -1,0 +1,3 @@
+# Macros
+
+This chapter covers declarative and attribute macros in Izel...

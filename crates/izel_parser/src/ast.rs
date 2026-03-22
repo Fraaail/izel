@@ -40,6 +40,7 @@ pub enum Item {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Forge {
     pub name: String,
+    pub name_span: Span,
     pub visibility: Visibility,
     pub is_flow: bool,
     pub generic_params: Vec<GenericParam>,
@@ -369,7 +370,7 @@ pub struct Arm {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pattern {
-    Ident(String, bool), // name, is_mut (e.g. ~x)
+    Ident(String, bool, izel_span::Span), // name, is_mut, span
     Variant(String, Vec<Pattern>),
     Literal(Literal),
     Struct {
@@ -596,7 +597,7 @@ impl AlphaEq for Stmt {
 impl AlphaEq for Pattern {
     fn alpha_eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Pattern::Ident(n1, m1), Pattern::Ident(n2, m2)) => n1 == n2 && m1 == m2,
+            (Pattern::Ident(n1, m1, _), Pattern::Ident(n2, m2, _)) => n1 == n2 && m1 == m2,
             (Pattern::Variant(n1, p1), Pattern::Variant(n2, p2)) => {
                 n1 == n2
                     && p1.len() == p2.len()

@@ -78,6 +78,10 @@ impl BorrowChecker {
 
     fn check_all(&mut self, mir: &MirBody, active_borrows: &FxHashMap<Local, Vec<ActiveBorrow>>) {
         let mut initialized = FxHashSet::default();
+        // Parameters are initialized at start
+        for i in 0..mir.arg_count {
+            initialized.insert(Local(i));
+        }
         let mut active_zones: Vec<String> = Vec::new();
         let mut zone_allocations: FxHashMap<String, FxHashSet<Local>> = FxHashMap::default();
 
@@ -190,15 +194,17 @@ impl BorrowChecker {
                         for arg in args {
                             self.check_operand(arg, &mut initialized, mir, active_borrows, node);
                         }
-                        initialized.insert(*place);
+                        if let Some(p) = place {
+                            initialized.insert(*p);
 
-                        if let Some(current_zone) = active_zones.last() {
-                            let ty = &mir.locals[place.0].ty;
-                            if let Type::Pointer(..) | Type::Adt(..) = ty {
-                                zone_allocations
-                                    .entry(current_zone.clone())
-                                    .or_default()
-                                    .insert(*place);
+                            if let Some(current_zone) = active_zones.last() {
+                                let ty = &mir.locals[p.0].ty;
+                                if let Type::Pointer(..) | Type::Adt(..) = ty {
+                                    zone_allocations
+                                        .entry(current_zone.clone())
+                                        .or_default()
+                                        .insert(*p);
+                                }
                             }
                         }
                     }
@@ -221,13 +227,11 @@ impl BorrowChecker {
     ) {
         match rvalue {
             Rvalue::Use(op) => self.check_operand(op, initialized, mir, active_borrows, block),
-            Rvalue::BinaryOp(_, l, r) => {
+            Rvalue::Binary(_, l, r) => {
                 self.check_operand(l, initialized, mir, active_borrows, block);
                 self.check_operand(r, initialized, mir, active_borrows, block);
             }
-            Rvalue::UnaryOp(_, op) => {
-                self.check_operand(op, initialized, mir, active_borrows, block)
-            }
+            Rvalue::Unary(_, op) => self.check_operand(op, initialized, mir, active_borrows, block),
             Rvalue::Ref(local, _) => {
                 if !initialized.contains(local) {
                     self.errors.push(format!(
@@ -357,7 +361,9 @@ impl LivenessAnalysis {
                     for arg in args {
                         Self::get_operand_use(arg, &mut uses, &defs);
                     }
-                    defs.insert(*local);
+                    if let Some(l) = local {
+                        defs.insert(*l);
+                    }
                 }
                 _ => {}
             }
@@ -373,11 +379,11 @@ impl LivenessAnalysis {
     fn get_rvalue_uses(rv: &Rvalue, uses: &mut FxHashSet<Local>, defs: &FxHashSet<Local>) {
         match rv {
             Rvalue::Use(op) => Self::get_operand_use(op, uses, defs),
-            Rvalue::BinaryOp(_, l, r) => {
+            Rvalue::Binary(_, l, r) => {
                 Self::get_operand_use(l, uses, defs);
                 Self::get_operand_use(r, uses, defs);
             }
-            Rvalue::UnaryOp(_, op) => Self::get_operand_use(op, uses, defs),
+            Rvalue::Unary(_, op) => Self::get_operand_use(op, uses, defs),
             Rvalue::Ref(local, _) => {
                 if !defs.contains(local) {
                     uses.insert(*local);

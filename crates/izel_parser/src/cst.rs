@@ -33,6 +33,7 @@ pub enum NodeKind {
 
     // Statements
     LetStmt,
+    GiveStmt,
     ExprStmt,
     Pattern,
 

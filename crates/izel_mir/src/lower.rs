@@ -1,7 +1,8 @@
 use crate::*;
 use izel_hir::{HirBlock, HirExpr, HirForge, HirStmt};
+use izel_parser::ast::{BinaryOp, UnaryOp};
 use izel_resolve::DefId;
-use izel_typeck::type_system::Type;
+use izel_typeck::type_system::{PrimType, Type};
 use std::collections::HashMap;
 
 pub struct MirLowerer {
@@ -10,12 +11,8 @@ pub struct MirLowerer {
     header: BlockId,
     forge_name: String,
     param_defs: Vec<DefId>,
-    /// Maps source DefId to its current SSA Local version in a given block.
-    current_defs: HashMap<(DefId, BlockId), Local>,
-    /// Tracks which blocks are "sealed" (all predecessors known).
-    sealed_blocks: Vec<BlockId>,
-    /// Incomplete Phis: (BlockId, DefId, Local_assigned_to_phi)
-    incomplete_phis: HashMap<BlockId, Vec<(DefId, Local)>>,
+    /// Map from DefId to Local slot
+    vars: HashMap<DefId, Local>,
     pub check_contracts: bool,
 }
 
@@ -35,17 +32,14 @@ impl MirLowerer {
             header: entry,
             forge_name: String::new(),
             param_defs: Vec::new(),
-            current_defs: HashMap::new(),
-            sealed_blocks: Vec::new(),
-            incomplete_phis: HashMap::new(),
+            vars: HashMap::new(),
             check_contracts: false,
         }
     }
 
     pub fn lower_forge(&mut self, forge: &HirForge) -> MirBody {
-        self.current_defs.clear();
-        self.sealed_blocks.clear();
-        self.incomplete_phis.clear();
+        self.vars.clear();
+        self.body.arg_count = forge.params.len();
         self.forge_name = forge.name.clone();
         self.param_defs = forge.params.iter().map(|p| p.def_id).collect();
 
@@ -59,22 +53,18 @@ impl MirLowerer {
         // Lower parameters as initial definitions in entry
         for param in &forge.params {
             let local = self.new_local(param.name.clone(), param.ty.clone());
-            self.write_variable(param.def_id, entry, local);
+            self.write_variable(param.def_id, local);
         }
 
         self.body
             .blocks
             .add_edge(entry, header, ControlFlow::Unconditional);
         self.body.blocks[entry].terminator = Some(Terminator::Goto(header));
-        self.seal_block(entry);
-
         self.current_block = header;
 
         if let Some(body) = &forge.body {
             self.lower_block(body);
         }
-
-        self.seal_block(self.header);
 
         let block = &mut self.body.blocks[self.current_block];
         if block.terminator.is_none() {
@@ -90,71 +80,22 @@ impl MirLowerer {
         Local(id)
     }
 
-    fn write_variable(&mut self, var: DefId, block: BlockId, local: Local) {
-        self.current_defs.insert((var, block), local);
+    fn write_variable(&mut self, var: DefId, local: Local) {
+        self.vars.insert(var, local);
     }
 
-    fn read_variable(&mut self, var: DefId, block: BlockId) -> Local {
-        if let Some(&local) = self.current_defs.get(&(var, block)) {
+    fn read_variable(&mut self, var: DefId) -> Local {
+        self.get_var_local(var)
+    }
+
+    fn get_var_local(&mut self, var: DefId) -> Local {
+        if let Some(&local) = self.vars.get(&var) {
             local
         } else {
-            self.read_variable_recursive(var, block)
+            let local = self.new_local(format!("v{:?}", var), Type::Error);
+            self.vars.insert(var, local);
+            local
         }
-    }
-
-    fn read_variable_recursive(&mut self, var: DefId, block: BlockId) -> Local {
-        let local;
-        if !self.sealed_blocks.contains(&block) {
-            local = self.new_local(format!("phi_v{:?}", var), Type::Error);
-            self.incomplete_phis
-                .entry(block)
-                .or_default()
-                .push((var, local));
-        } else {
-            let preds: Vec<_> = self
-                .body
-                .blocks
-                .neighbors_directed(block, petgraph::Direction::Incoming)
-                .collect();
-            if preds.len() == 1 {
-                local = self.read_variable(var, preds[0]);
-            } else if preds.is_empty() {
-                // Should not happen for reachable blocks except entry
-                local = self.new_local("undef".into(), Type::Error);
-            } else {
-                local = self.new_local(format!("phi_v{:?}", var), Type::Error);
-                self.write_variable(var, block, local);
-                self.add_phi_operands(var, local, block);
-            }
-        }
-        self.write_variable(var, block, local);
-        local
-    }
-
-    fn add_phi_operands(&mut self, var: DefId, phi_local: Local, block: BlockId) {
-        let preds: Vec<_> = self
-            .body
-            .blocks
-            .neighbors_directed(block, petgraph::Direction::Incoming)
-            .collect();
-        let mut operands = Vec::new();
-        for pred in preds {
-            let val = self.read_variable(var, pred);
-            operands.push((pred, val));
-        }
-        // Insert Phi at the beginning
-        self.body.blocks[block]
-            .instructions
-            .insert(0, Instruction::Phi(phi_local, operands));
-    }
-
-    pub fn seal_block(&mut self, block: BlockId) {
-        if let Some(phis) = self.incomplete_phis.remove(&block) {
-            for (var, phi_local) in phis {
-                self.add_phi_operands(var, phi_local, block);
-            }
-        }
-        self.sealed_blocks.push(block);
     }
 
     fn lower_block(&mut self, block: &HirBlock) -> Rvalue {
@@ -183,16 +124,15 @@ impl MirLowerer {
                     self.body.blocks[self.current_block]
                         .instructions
                         .push(Instruction::Assign(local, rvalue));
-                    self.write_variable(*def_id, self.current_block, local);
+                    self.write_variable(*def_id, local);
                 }
             }
             HirStmt::Assign { def_id, expr, .. } => {
                 let rvalue = self.lower_expr(expr);
-                let local = self.new_local(format!("reassign_{:?}", def_id), Type::Error);
+                let local = self.read_variable(*def_id);
                 self.body.blocks[self.current_block]
                     .instructions
                     .push(Instruction::Assign(local, rvalue));
-                self.write_variable(*def_id, self.current_block, local);
             }
             HirStmt::Expr(expr) => {
                 self.lower_expr(expr);
@@ -212,15 +152,17 @@ impl MirLowerer {
                 };
                 Rvalue::Use(Operand::Constant(constant))
             }
-            HirExpr::Ident(def_id, _, _) => {
-                let local = self.read_variable(*def_id, self.current_block);
-                Rvalue::Use(Operand::Move(local))
+            HirExpr::Ident(_, var, _ty, _) => {
+                let local = self.read_variable(*var);
+                Rvalue::Use(Operand::Copy(local))
             }
             HirExpr::Zone { name, body, .. } => {
+                println!("  Adding ZoneEnter to {:?}: {}", self.current_block, name);
                 self.body.blocks[self.current_block]
                     .instructions
                     .push(Instruction::ZoneEnter(name.clone()));
                 let rv = self.lower_block(body);
+                println!("  Adding ZoneExit to {:?}: {}", self.current_block, name);
                 self.body.blocks[self.current_block]
                     .instructions
                     .push(Instruction::ZoneExit(name.clone()));
@@ -233,12 +175,32 @@ impl MirLowerer {
                 let r_op = self.rvalue_to_operand(rr);
 
                 let mir_op = match op {
-                    izel_parser::ast::BinaryOp::Add => BinOp::Add,
-                    _ => BinOp::Add, // map other ops...
+                    BinaryOp::Add => BinOp::Add,
+                    BinaryOp::Sub => BinOp::Sub,
+                    BinaryOp::Mul => BinOp::Mul,
+                    BinaryOp::Div => BinOp::Div,
+                    BinaryOp::Eq => BinOp::Eq,
+                    BinaryOp::Ne => BinOp::Ne,
+                    BinaryOp::Lt => BinOp::Lt,
+                    BinaryOp::Le => BinOp::Le,
+                    BinaryOp::Gt => BinOp::Gt,
+                    BinaryOp::Ge => BinOp::Ge,
+                    _ => BinOp::Add,
                 };
-                Rvalue::BinaryOp(mir_op, l_op, r_op)
+                Rvalue::Binary(mir_op, l_op, r_op)
             }
-            HirExpr::Call(callee, args, requires, _) => {
+            HirExpr::Unary(op, inner, _) => {
+                let rv = self.lower_expr(inner);
+                let op_val = self.rvalue_to_operand(rv);
+
+                let mir_op = match op {
+                    UnaryOp::Neg => UnOp::Neg,
+                    UnaryOp::Not => UnOp::Not,
+                    _ => UnOp::Neg,
+                };
+                Rvalue::Unary(mir_op, op_val)
+            }
+            HirExpr::Call(callee, args, requires, ret_ty) => {
                 let mut operands = Vec::new();
                 for arg in args {
                     let rv = self.lower_expr(arg);
@@ -257,49 +219,61 @@ impl MirLowerer {
                         ));
                 }
 
-                let callee_name = if let HirExpr::Ident(_, _, _) = &**callee {
-                    "call_target".to_string()
+                let callee_name = if let HirExpr::Ident(name, _, _, _) = &**callee {
+                    name.clone()
                 } else {
                     "unknown".to_string()
                 };
 
-                let local = self.new_local("call_tmp".to_string(), Type::Error);
-                self.body.blocks[self.current_block]
-                    .instructions
-                    .push(Instruction::Call(local, callee_name, operands));
-                Rvalue::Use(Operand::Move(local))
+                if let Type::Prim(PrimType::Void) = ret_ty {
+                    self.body.blocks[self.current_block]
+                        .instructions
+                        .push(Instruction::Call(None, callee_name, operands));
+                    Rvalue::Use(Operand::Constant(Constant::Bool(false))) // Return dummy
+                } else {
+                    let local = self.new_local("call_tmp".to_string(), ret_ty.clone());
+                    self.body.blocks[self.current_block]
+                        .instructions
+                        .push(Instruction::Call(Some(local), callee_name, operands));
+                    Rvalue::Use(Operand::Move(local))
+                }
             }
             HirExpr::Return(expr) => {
                 if let Some(e) = expr {
                     if let HirExpr::Call(callee, args, _, _) = &**e {
                         // Check for TCO
-                        let is_recursive = matches!(&**callee, HirExpr::Ident(_, _, _));
-                        if is_recursive {
-                            // TCO transformation:
-                            let mut arg_ops = Vec::new();
-                            for arg in args {
-                                let rv = self.lower_expr(arg);
-                                arg_ops.push(self.rvalue_to_operand(rv));
-                            }
-                            // Re-assign params
-                            let param_defs = self.param_defs.clone();
-                            for (i, def_id) in param_defs.iter().enumerate() {
-                                if i < arg_ops.len() {
-                                    let local = self.new_local(format!("tco_p{}", i), Type::Error);
-                                    self.body.blocks[self.current_block].instructions.push(
-                                        Instruction::Assign(local, Rvalue::Use(arg_ops[i].clone())),
-                                    );
-                                    self.write_variable(*def_id, self.current_block, local);
+                        if let HirExpr::Ident(name, _, _, _) = &**callee {
+                            if name == &self.forge_name {
+                                // TCO transformation:
+                                let mut arg_ops: Vec<Operand> = Vec::new();
+                                for arg in args {
+                                    let rv = self.lower_expr(arg);
+                                    arg_ops.push(self.rvalue_to_operand(rv));
                                 }
+                                // Re-assign params
+                                let param_defs = self.param_defs.clone();
+                                for (i, def_id) in param_defs.iter().enumerate() {
+                                    if i < arg_ops.len() {
+                                        let local =
+                                            self.new_local(format!("tco_p{}", i), Type::Error);
+                                        self.body.blocks[self.current_block].instructions.push(
+                                            Instruction::Assign(
+                                                local,
+                                                Rvalue::Use(arg_ops[i].clone()),
+                                            ),
+                                        );
+                                        self.write_variable(*def_id, local);
+                                    }
+                                }
+                                self.body.blocks.add_edge(
+                                    self.current_block,
+                                    self.header,
+                                    ControlFlow::Unconditional,
+                                );
+                                self.body.blocks[self.current_block].terminator =
+                                    Some(Terminator::Goto(self.header));
+                                return Rvalue::Use(Operand::Constant(Constant::Int(0)));
                             }
-                            self.body.blocks.add_edge(
-                                self.current_block,
-                                self.header,
-                                ControlFlow::Unconditional,
-                            );
-                            self.body.blocks[self.current_block].terminator =
-                                Some(Terminator::Goto(self.header));
-                            return Rvalue::Use(Operand::Constant(Constant::Int(0)));
                         }
                     }
                     let rv = self.lower_expr(e);
@@ -348,9 +322,6 @@ impl MirLowerer {
                 self.body.blocks[self.current_block].terminator =
                     Some(Terminator::SwitchInt(cond_op, vec![(1, then_id)], else_id));
 
-                self.seal_block(then_id);
-                self.seal_block(else_id);
-
                 self.current_block = then_id;
                 self.lower_block(then_block);
                 if self.body.blocks[self.current_block].terminator.is_none() {
@@ -378,7 +349,7 @@ impl MirLowerer {
                 }
 
                 self.current_block = join_id;
-                self.seal_block(join_id);
+
                 Rvalue::Use(Operand::Constant(Constant::Int(0)))
             }
             _ => Rvalue::Use(Operand::Constant(Constant::Int(0))),
@@ -409,9 +380,11 @@ mod tests {
     fn test_lower_ssa_let() {
         let forge = HirForge {
             name: "main".into(),
+            name_span: Span::dummy(),
             def_id: DefId(0),
             params: vec![],
             ret_type: Type::Error,
+            attributes: vec![],
             body: Some(HirBlock {
                 stmts: vec![HirStmt::Let {
                     name: "x".into(),
@@ -436,6 +409,7 @@ mod tests {
         let x_def = DefId(10);
         let forge = HirForge {
             name: "fact".into(),
+            name_span: Span::dummy(),
             def_id: DefId(0),
             params: vec![HirParam {
                 name: "n".into(),
@@ -446,10 +420,16 @@ mod tests {
                 span: Span::dummy(),
             }],
             ret_type: Type::Error,
+            attributes: vec![],
             body: Some(HirBlock {
                 stmts: vec![],
                 expr: Some(Box::new(HirExpr::Return(Some(Box::new(HirExpr::Call(
-                    Box::new(HirExpr::Ident(DefId(0), Type::Error, Span::dummy())),
+                    Box::new(HirExpr::Ident(
+                        "fact".to_string(),
+                        DefId(0),
+                        Type::Error,
+                        Span::dummy(),
+                    )),
                     vec![HirExpr::Literal(izel_parser::ast::Literal::Int(0))],
                     vec![],
                     Type::Error,
@@ -491,16 +471,22 @@ mod tests {
 
         // 1. Mock a call to 'f(n)' with @requires(n > 0)
         let n_id = DefId(10);
-        let n_expr = HirExpr::Ident(n_id, i32_ty.clone(), izel_span::Span::dummy());
+        let n_expr = HirExpr::Ident(
+            "n".to_string(),
+            n_id,
+            i32_ty.clone(),
+            izel_span::Span::dummy(),
+        );
 
         let requires = vec![HirExpr::Binary(
             izel_parser::ast::BinaryOp::Gt,
             Box::new(n_expr.clone()),
             Box::new(HirExpr::Literal(izel_parser::ast::Literal::Int(0))),
-            Type::Prim(izel_typeck::type_system::PrimType::Bool),
+            Type::Prim(PrimType::Bool),
         )];
 
         let callee = Box::new(HirExpr::Ident(
+            "f".to_string(),
             DefId(20),
             Type::Error,
             izel_span::Span::dummy(),

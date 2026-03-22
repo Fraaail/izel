@@ -62,7 +62,10 @@ fn main() -> Result<()> {
     let cst = parser.parse_source_file();
 
     println!("Resolving symbols...");
-    let mut resolver = izel_resolve::Resolver::new();
+    let base_path = std::path::Path::new(input_path)
+        .parent()
+        .map(|p| p.to_path_buf());
+    let mut resolver = izel_resolve::Resolver::new(base_path);
     resolver.resolve_source_file(&cst, &source);
 
     println!("Desugaring AST...");
@@ -71,7 +74,21 @@ fn main() -> Result<()> {
 
     println!("Type checking...");
     let mut typeck = izel_typeck::TypeChecker::with_builtins();
-    typeck.check_ast(&_ast);
+    typeck.span_to_def = resolver.def_ids.clone();
+
+    // Collect all loaded modules as ASTs for type checking
+    let mut ast_modules = std::collections::HashMap::new();
+    let loaded_csts = resolver.loaded_csts.read().unwrap();
+    for (name, (cst, source)) in loaded_csts.iter() {
+        let mod_ast_lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = mod_ast_lowerer.lower_module(cst);
+        ast_modules.insert(name.clone(), ast);
+    }
+
+    // Drop the lock before calling typecheck, as it might draw more modules (though not currently)
+    drop(loaded_csts);
+
+    typeck.check_project(&_ast, ast_modules);
 
     if !typeck.diagnostics.is_empty() {
         let mut source_map = izel_span::SourceMap::default();
@@ -83,29 +100,70 @@ fn main() -> Result<()> {
     }
 
     println!("Lowering AST to HIR...");
-    let hir_lowerer = izel_hir::lower::HirLowerer::new();
-    let hir_module = hir_lowerer.lower_module(&_ast);
+    let hir_lowerer = izel_hir::lower::HirLowerer::new(&resolver, &typeck.def_types);
+    let mut all_hir_items = Vec::new();
 
-    println!("Borrow checking...");
+    // Lower primary module
+    let primary_hir = hir_lowerer.lower_module(&_ast);
+    all_hir_items.extend(primary_hir.items);
+
+    // Lower all loaded modules
+    let loaded_csts_hir = resolver.loaded_csts.read().unwrap();
+    for (name, (cst, source)) in loaded_csts_hir.iter() {
+        println!("Lowering module to HIR: {}", name);
+        let mod_ast_lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = mod_ast_lowerer.lower_module(cst);
+        let mod_hir = hir_lowerer.lower_module(&ast);
+        all_hir_items.extend(mod_hir.items);
+    }
+    drop(loaded_csts_hir);
+
+    let hir_module = izel_hir::HirModule {
+        items: all_hir_items,
+    };
+
+    println!("Borrow checking & lowering to MIR...");
     let mut mir_lowerer = izel_mir::lower::MirLowerer::new();
     mir_lowerer.check_contracts = session.options.check_contracts;
     let mut borrow_checker = izel_borrow::BorrowChecker::new();
+    let mut mir_bodies = std::collections::HashMap::new();
 
-    for item in &hir_module.items {
-        if let izel_hir::HirItem::Forge(f) = item {
-            let mir = mir_lowerer.lower_forge(f);
-            if let Err(errors) = borrow_checker.check(&mir) {
-                for err in errors {
-                    eprintln!("Borrow Check Error in '{}': {}", f.name, err);
+    fn collect_mir(
+        items: &[izel_hir::HirItem],
+        mir_lowerer: &mut izel_mir::lower::MirLowerer,
+        borrow_checker: &mut izel_borrow::BorrowChecker,
+        mir_bodies: &mut std::collections::HashMap<izel_resolve::DefId, izel_mir::MirBody>,
+    ) {
+        for item in items {
+            match item {
+                izel_hir::HirItem::Forge(f) => {
+                    let mir = mir_lowerer.lower_forge(f);
+                    if let Err(errors) = borrow_checker.check(&mir) {
+                        for err in errors {
+                            eprintln!("Borrow Check Error in '{}': {}", f.name, err);
+                        }
+                    }
+                    mir_bodies.insert(f.def_id, mir.clone());
                 }
+                izel_hir::HirItem::Ward(w) => {
+                    collect_mir(&w.items, mir_lowerer, borrow_checker, mir_bodies);
+                }
+                _ => {}
             }
         }
     }
 
+    collect_mir(
+        &hir_module.items,
+        &mut mir_lowerer,
+        &mut borrow_checker,
+        &mut mir_bodies,
+    );
+
     println!("Generating LLVM IR...");
     let context = inkwell::context::Context::create();
     let mut codegen = izel_codegen::Codegen::new(&context, "main", &source);
-    codegen.gen_module(&_ast)?;
+    codegen.gen_module(&hir_module, &mir_bodies)?;
 
     println!("--- LLVM IR ---\n{}", codegen.emit_llvm_ir());
     println!("---------------\n");

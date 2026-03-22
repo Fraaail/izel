@@ -1,0 +1,5 @@
+draw math::add
+
+forge main() -> int {
+    give add(2, 3)
+}

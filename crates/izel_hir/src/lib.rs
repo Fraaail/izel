@@ -15,6 +15,8 @@ pub enum HirItem {
     Forge(Box<HirForge>),
     Shape(HirShape),
     Scroll(HirScroll),
+    Ward(HirWard),
+    Draw(HirDraw),
 }
 
 #[derive(Debug, Clone)]
@@ -32,11 +34,28 @@ pub struct HirScroll {
 }
 
 #[derive(Debug, Clone)]
+pub struct HirWard {
+    pub name: String,
+    pub items: Vec<HirItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct HirDraw {
+    pub path: Vec<String>,
+    pub def_id: Option<DefId>,
+    pub is_wildcard: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct HirForge {
     pub name: String,
+    pub name_span: Span,
     pub def_id: DefId,
     pub params: Vec<HirParam>,
     pub ret_type: Type,
+    pub attributes: Vec<ast::Attribute>,
     pub body: Option<HirBlock>,
     pub requires: Vec<HirExpr>,
     pub ensures: Vec<HirExpr>,
@@ -80,7 +99,7 @@ pub enum HirStmt {
 #[derive(Debug, Clone)]
 pub enum HirExpr {
     Literal(ast::Literal),
-    Ident(DefId, Type, Span),
+    Ident(String, DefId, Type, Span),
     Binary(ast::BinaryOp, Box<HirExpr>, Box<HirExpr>, Type),
     Unary(ast::UnaryOp, Box<HirExpr>, Type),
     Call(Box<HirExpr>, Vec<HirExpr>, Vec<HirExpr>, Type),

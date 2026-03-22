@@ -15,3 +15,4 @@ izel_resolve = { workspace = true }
 izel_span = { workspace = true }
 izel_lexer = { workspace = true }
 serde = { workspace = true }
+rustc-hash = { workspace = true }

@@ -7,6 +7,12 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-build
+        name: cargo build
+        entry: cargo build --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false
       - id: cargo-test
         name: cargo test
         entry: cargo test --workspace
@@ -21,7 +27,7 @@ repos:
         pass_filenames: false
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --all -- --check
+        entry: cargo fmt --all
         language: system
         types: [rust]
         pass_filenames: false

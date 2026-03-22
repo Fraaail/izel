@@ -514,9 +514,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "inkwell",
+ "izel_hir",
  "izel_lexer",
  "izel_mir",
  "izel_parser",
+ "izel_resolve",
  "izel_span",
  "izel_typeck",
  "tracing",
@@ -582,6 +584,7 @@ dependencies = [
  "izel_resolve",
  "izel_span",
  "izel_typeck",
+ "rustc-hash",
  "serde",
 ]
 

@@ -1,10 +1,11 @@
 #![allow(clippy::collapsible_match, clippy::too_many_arguments)]
 pub mod type_system;
 
+use crate::type_system::{BuiltinWitness, Effect, EffectSet, Lifetime, PrimType, Scheme, Type};
 use izel_parser::ast;
 use izel_resolve::DefId;
+use izel_span::Span;
 use rustc_hash::FxHashMap;
-use type_system::{BuiltinWitness, Effect, EffectSet, PrimType, Scheme, Type};
 
 pub mod contracts;
 pub use izel_parser::contracts::ContractChecker;
@@ -34,6 +35,9 @@ pub struct TypeChecker {
     pub method_env: FxHashMap<String, FxHashMap<String, Scheme>>,
     pub current_self: Option<Type>,
     pub in_flow_context: bool,
+    pub ast_modules: std::collections::HashMap<String, ast::Module>,
+    pub handled_modules: std::collections::HashSet<String>,
+    pub span_to_def: std::sync::Arc<std::sync::RwLock<rustc_hash::FxHashMap<Span, DefId>>>,
 }
 
 impl Default for TypeChecker {
@@ -66,7 +70,21 @@ impl TypeChecker {
             method_env: FxHashMap::default(),
             current_self: None,
             in_flow_context: false,
+            ast_modules: std::collections::HashMap::default(),
+            handled_modules: std::collections::HashSet::default(),
+            span_to_def: std::sync::Arc::new(std::sync::RwLock::new(
+                rustc_hash::FxHashMap::default(),
+            )),
         }
+    }
+
+    pub fn check_project(
+        &mut self,
+        main: &ast::Module,
+        others: std::collections::HashMap<String, ast::Module>,
+    ) {
+        self.ast_modules = others;
+        self.check_ast(main);
     }
 
     pub fn with_builtins() -> Self {
@@ -86,6 +104,7 @@ impl TypeChecker {
             ("f64", PrimType::F64),
             ("bool", PrimType::Bool),
             ("str", PrimType::Str),
+            ("int", PrimType::I32),
             ("void", PrimType::Void),
         ];
         for (name, pt) in primitives {
@@ -106,6 +125,29 @@ impl TypeChecker {
                 },
             );
         }
+
+        // Add 'ptr' as *void
+        let ptr_ty = Type::Pointer(
+            Box::new(Type::Prim(PrimType::Void)),
+            false,
+            Lifetime::Static,
+        );
+        tc.env[0].insert(
+            "ptr".to_string(),
+            Scheme {
+                vars: vec![],
+                effect_vars: vec![],
+                names: vec![],
+                bounds: vec![],
+                ty: ptr_ty,
+                param_names: vec![],
+                requires: vec![],
+                ensures: vec![],
+                intrinsic: None,
+                visibility: ast::Visibility::Open,
+            },
+        );
+
         tc
     }
 
@@ -312,7 +354,8 @@ impl TypeChecker {
                         self.diagnostics
                             .push(izel_diagnostics::Diagnostic::error().with_message(format!(
                                 "Function has effects {:?} but only declared {:?}",
-                                collected, declared
+                                self.prune_effects(&collected),
+                                declared
                             )));
                     }
                 }
@@ -468,11 +511,31 @@ impl TypeChecker {
                 let ty = self.lower_ast_type(&st.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = st.visibility.clone();
-                self.define_scheme(st.name.clone(), scheme);
+                self.define_scheme(st.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&st.span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
             }
             ast::Item::Forge(f) => {
                 let scheme = self.collect_forge_signature(f);
-                self.define_scheme(f.name.clone(), scheme);
+                self.define_scheme(f.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&f.name_span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
+            }
+
+            ast::Item::Draw(d) => {
+                let name = d.path.join("/");
+                if self.handled_modules.contains(&name) {
+                    return;
+                }
+                if let Some(module) = self.ast_modules.get(&name).cloned() {
+                    self.handled_modules.insert(name.clone());
+                    // Izel's 'draw std/io' seems to pull items into the current scope
+                    for item in &module.items {
+                        self.collect_item_signature(item);
+                    }
+                }
             }
 
             ast::Item::Shape(s) => {
@@ -492,7 +555,10 @@ impl TypeChecker {
                 let mut scheme = self.generalize(&ty);
                 scheme.bounds = bounds;
                 scheme.visibility = s.visibility.clone();
-                self.define_scheme(s.name.clone(), scheme);
+                self.define_scheme(s.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&s.span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
 
                 if !s.invariants.is_empty() {
                     self.shape_invariants
@@ -514,7 +580,10 @@ impl TypeChecker {
                 let mut scheme = self.generalize(&ty);
                 scheme.bounds = bounds;
                 scheme.visibility = d.visibility.clone();
-                self.define_scheme(d.name.clone(), scheme);
+                self.define_scheme(d.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&d.span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
 
                 let old_self = self.current_self.clone();
                 self.current_self = Some(ty.clone());
@@ -527,12 +596,18 @@ impl TypeChecker {
                 let ty = self.lower_ast_type(&a.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = a.visibility.clone();
-                self.define_scheme(a.name.clone(), scheme);
+                self.define_scheme(a.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&a.span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
             }
             ast::Item::Scroll(s) => {
                 let mut scheme = self.generalize(&Type::Adt(DefId(0)));
                 scheme.visibility = s.visibility.clone();
-                self.define_scheme(s.name.clone(), scheme);
+                self.define_scheme(s.name.clone(), scheme.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(&s.span) {
+                    self.def_types.insert(*def_id, scheme.ty.clone());
+                }
             }
             ast::Item::Echo(e) => {
                 // Compile-time execution stub
@@ -544,7 +619,6 @@ impl TypeChecker {
                     self.collect_item_signature(it);
                 }
             }
-            _ => {}
         }
     }
 
@@ -567,8 +641,11 @@ impl TypeChecker {
                     ty = target.clone();
                 }
             }
-            params.push(ty);
+            params.push(ty.clone());
             param_names.push(p.name.clone());
+            if let Some(def_id) = self.span_to_def.read().unwrap().get(&p.span) {
+                self.def_types.insert(*def_id, ty);
+            }
         }
 
         let ast_ret = &f.ret_type;
@@ -595,9 +672,7 @@ impl TypeChecker {
             });
         }
 
-        let effect_set = if f.effects.is_empty() {
-            self.new_effect_var()
-        } else if f.effects.contains(&"pure".to_string()) {
+        let effect_set = if f.effects.contains(&"pure".to_string()) || f.effects.is_empty() {
             EffectSet::Concrete(vec![Effect::Pure])
         } else {
             EffectSet::Concrete(effects)
@@ -636,13 +711,20 @@ impl TypeChecker {
 
     fn check_block_with_expected(&mut self, block: &ast::Block, expected: Option<&Type>) {
         self.push_scope();
+        let mut returns = false;
         for stmt in &block.stmts {
-            self.check_stmt(stmt);
+            let ty = self.check_stmt(stmt);
+            if self.prune(&ty) == Type::Prim(PrimType::Never) {
+                returns = true;
+            }
         }
         if let Some(expr) = &block.expr {
             let ty = self.infer_expr(expr);
+            if self.prune(&ty) == Type::Prim(PrimType::Never) {
+                returns = true;
+            }
             if let Some(et) = expected {
-                if !self.unify(et, &ty) {
+                if !returns && !self.unify(et, &ty) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
                             "Block return type mismatch. Expected {:?}, found {:?}",
@@ -652,7 +734,13 @@ impl TypeChecker {
             }
         } else if let Some(et) = expected {
             // Empty block with expected return type must be Void
-            self.unify(&Type::Prim(PrimType::Void), et);
+            if !returns && !self.unify(&Type::Prim(PrimType::Void), et) {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "Block return type mismatch. Expected {:?}, found Prim(Void)",
+                        et
+                    )));
+            }
         }
         self.pop_scope();
     }
@@ -690,11 +778,9 @@ impl TypeChecker {
         Type::Error
     }
 
-    fn check_stmt(&mut self, stmt: &ast::Stmt) {
+    fn check_stmt(&mut self, stmt: &ast::Stmt) -> Type {
         match stmt {
-            ast::Stmt::Expr(e) => {
-                self.infer_expr(e);
-            }
+            ast::Stmt::Expr(e) => self.infer_expr(e),
             ast::Stmt::Let {
                 pat,
                 ty,
@@ -702,7 +788,7 @@ impl TypeChecker {
                 span: _,
             } => {
                 let name = match pat {
-                    ast::Pattern::Ident(n, _) => n.clone(),
+                    ast::Pattern::Ident(n, _, _) => n.clone(),
                     _ => "_destructuring_not_supported_typeck".to_string(),
                 };
                 self.enter_level();
@@ -724,7 +810,15 @@ impl TypeChecker {
                 self.exit_level();
 
                 let scheme = self.generalize(&var_ty);
-                self.define_scheme(name.clone(), scheme);
+                self.define_scheme(name.clone(), scheme.clone());
+
+                if let ast::Pattern::Ident(_, _, span) = pat {
+                    if let Some(def_id) = self.span_to_def.read().unwrap().get(span) {
+                        let fully_resolved_ty = self.prune(&scheme.ty);
+                        self.def_types.insert(*def_id, fully_resolved_ty);
+                    }
+                }
+                Type::Prim(PrimType::Void)
             }
         }
     }
@@ -741,14 +835,15 @@ impl TypeChecker {
             ast::Type::Prim(s) => {
                 dbg!(s);
                 match s.as_str() {
-                    "i32" => Type::Prim(PrimType::I32),
+                    "int" | "i32" => Type::Prim(PrimType::I32),
+                    "never" => Type::Prim(PrimType::Never),
                     "i64" => Type::Prim(PrimType::I64),
                     "u8" => Type::Prim(PrimType::U8),
                     "u16" => Type::Prim(PrimType::U16),
                     "u32" => Type::Prim(PrimType::U32),
                     "u64" => Type::Prim(PrimType::U64),
                     "usize" => Type::Prim(PrimType::U64), // alias for now
-                    "f32" => Type::Prim(PrimType::F32),
+                    "float" | "f32" => Type::Prim(PrimType::F32),
                     "f64" => Type::Prim(PrimType::F64),
                     "str" => Type::Prim(PrimType::Str),
                     "bool" => Type::Prim(PrimType::Bool),
@@ -871,6 +966,7 @@ impl TypeChecker {
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => true,
             (Type::Var(id), other) => self.occurs_check_and_adjust_levels(*id, other),
             (other, Type::Var(id)) => self.occurs_check_and_adjust_levels(*id, other),
+            (Type::Prim(PrimType::Never), _) | (_, Type::Prim(PrimType::Never)) => true,
             (Type::Prim(p1), Type::Prim(p2)) => p1 == p2,
             (Type::Prim(PrimType::None), Type::Optional(_)) => true,
             (Type::Optional(_), Type::Prim(PrimType::None)) => true,
@@ -1438,7 +1534,7 @@ impl TypeChecker {
                 if let Some(target) = self.expected_ret.clone() {
                     self.unify(&ty, &target);
                 }
-                Type::Error
+                Type::Prim(PrimType::Never)
             }
             ast::Expr::Next | ast::Expr::Break => Type::Prim(PrimType::Void),
             ast::Expr::Loop(block) => {
@@ -1560,8 +1656,11 @@ impl TypeChecker {
     fn bind_pattern(&mut self, pattern: &ast::Pattern, ty: &Type) {
         let ty = self.prune(ty);
         match pattern {
-            ast::Pattern::Ident(name, _is_mut) => {
-                self.define(name.clone(), ty);
+            ast::Pattern::Ident(name, _is_mut, span) => {
+                self.define(name.clone(), ty.clone());
+                if let Some(def_id) = self.span_to_def.read().unwrap().get(span) {
+                    self.def_types.insert(*def_id, ty.clone());
+                }
             }
             ast::Pattern::Variant(_variant, subpatterns) => {
                 // Hardcoded logic for Optional and Cascade unwrapping for now

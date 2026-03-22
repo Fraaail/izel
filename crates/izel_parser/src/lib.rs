@@ -692,7 +692,9 @@ impl Parser {
                 break;
             }
             children.extend(self.eat_trivia());
-            if self.current_kind() == TokenKind::DoubleColon {
+            if self.current_kind() == TokenKind::DoubleColon
+                || self.current_kind() == TokenKind::Slash
+            {
                 children.push(SyntaxElement::Token(self.bump()));
                 children.extend(self.eat_trivia());
             } else {
@@ -886,6 +888,16 @@ impl Parser {
                     children.push(SyntaxElement::Token(self.bump()));
                 }
                 SyntaxNode::new(NodeKind::LetStmt, children)
+            }
+            TokenKind::Give => {
+                children.push(SyntaxElement::Token(self.bump())); // give
+                children.extend(self.eat_trivia());
+                children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+                children.extend(self.eat_trivia());
+                if self.current_kind() == TokenKind::Semicolon {
+                    children.push(SyntaxElement::Token(self.bump()));
+                }
+                SyntaxNode::new(NodeKind::GiveStmt, children)
             }
             TokenKind::OpenBrace => SyntaxNode::new(
                 NodeKind::Block,

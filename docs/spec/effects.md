@@ -1,0 +1,3 @@
+# Effects
+
+Specification for the effect system...

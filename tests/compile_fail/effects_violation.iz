@@ -1,0 +1,6 @@
+forge read() !io {
+}
+
+forge pure_func() {
+    read()
+}

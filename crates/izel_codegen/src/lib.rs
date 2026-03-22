@@ -5,13 +5,15 @@ use inkwell::basic_block::BasicBlock as LlvmBasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::BasicType;
+
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
+use izel_hir::{HirForge, HirItem};
 use izel_mir::{
     BinOp, BlockId, Constant, Instruction, Local, MirBody, Operand, Rvalue, Terminator, UnOp,
 };
 use izel_parser::ast;
+use izel_resolve::DefId;
 use izel_typeck::type_system::{PrimType, Type};
 use std::collections::HashMap;
 
@@ -58,7 +60,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         let entry_bb = self.blocks[&body.entry];
         self.builder.position_at_end(entry_bb);
         for (i, local_data) in body.locals.iter().enumerate() {
-            let ty = self.llvm_type(&local_data.ty)?;
+            let ty = llvm_type_static(self.context, &local_data.ty)?;
             let ptr = self.builder.build_alloca(ty, &local_data.name)?;
             self.locals.insert(Local(i), ptr);
         }
@@ -83,7 +85,6 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             if let Some(term) = &mir_bb.terminator {
                 self.gen_terminator(term, body)?;
             } else {
-                // If no terminator, build an implicit return or unreachable
                 self.builder.build_unreachable()?;
             }
         }
@@ -99,10 +100,11 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 self.builder.build_store(ptr, val)?;
             }
             Instruction::Call(dest, name, args) => {
+                let gen_name = format!("_iz_{}", name);
                 let function = self
                     .module
-                    .get_function(name)
-                    .ok_or_else(|| anyhow!("Undefined function: {}", name))?;
+                    .get_function(&gen_name)
+                    .ok_or_else(|| anyhow!("Function not found: {}", gen_name))?;
 
                 let mut llvm_args = Vec::new();
                 for arg in args {
@@ -111,8 +113,10 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
 
                 let call = self.builder.build_call(function, &llvm_args, "call_tmp")?;
                 if let Some(val) = call.try_as_basic_value().left() {
-                    let ptr = self.locals[dest];
-                    self.builder.build_store(ptr, val)?;
+                    if let Some(dest_local) = dest {
+                        let ptr = self.locals[dest_local];
+                        self.builder.build_store(ptr, val)?;
+                    }
                 }
             }
             Instruction::Phi(_local, _entries) => {
@@ -177,12 +181,12 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
     fn gen_rvalue(&mut self, rvalue: &Rvalue, body: &MirBody) -> Result<BasicValueEnum<'ctx>> {
         match rvalue {
             Rvalue::Use(op) => self.gen_operand(op, body),
-            Rvalue::BinaryOp(op, lhs, rhs) => {
+            Rvalue::Binary(op, lhs, rhs) => {
                 let l = self.gen_operand(lhs, body)?;
                 let r = self.gen_operand(rhs, body)?;
                 self.gen_bin_op(*op, l, r)
             }
-            Rvalue::UnaryOp(op, inner) => {
+            Rvalue::Unary(op, inner) => {
                 let val = self.gen_operand(inner, body)?;
                 self.gen_un_op(*op, val)
             }
@@ -194,7 +198,7 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
         match op {
             Operand::Copy(l) | Operand::Move(l) => {
                 let ptr = self.locals[l];
-                let ty = self.llvm_type(&body.locals[l.0].ty)?;
+                let ty = llvm_type_static(self.context, &body.locals[l.0].ty)?;
                 Ok(self.builder.build_load(ty, ptr, "load_tmp")?)
             }
             Operand::Constant(c) => match c {
@@ -255,21 +259,59 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
             UnOp::Neg => Ok(self.builder.build_int_neg(v, "neg_tmp")?.into()),
         }
     }
+}
 
-    fn llvm_type(&self, ty: &Type) -> Result<inkwell::types::BasicTypeEnum<'ctx>> {
-        match ty {
-            Type::Prim(p) => match p {
-                PrimType::I32 => Ok(self.context.i32_type().into()),
-                PrimType::F64 => Ok(self.context.f64_type().into()),
-                PrimType::Bool => Ok(self.context.bool_type().into()),
-                _ => Ok(self.context.i32_type().into()),
-            },
-            _ => Ok(self.context.i32_type().into()),
-        }
+pub fn llvm_type_static<'ctx>(
+    context: &'ctx Context,
+    ty: &Type,
+) -> Result<inkwell::types::BasicTypeEnum<'ctx>> {
+    match ty {
+        Type::Prim(p) => match p {
+            PrimType::I8 | PrimType::U8 => Ok(context.i8_type().into()),
+            PrimType::I16 | PrimType::U16 => Ok(context.i16_type().into()),
+            PrimType::I32 | PrimType::U32 => Ok(context.i32_type().into()),
+            PrimType::I64 | PrimType::U64 => Ok(context.i64_type().into()),
+            PrimType::I128 | PrimType::U128 => Ok(context.i128_type().into()),
+            PrimType::F32 => Ok(context.f32_type().into()),
+            PrimType::F64 => Ok(context.f64_type().into()),
+            PrimType::Bool => Ok(context.bool_type().into()),
+            PrimType::Void => Err(anyhow!("Cannot represent void as basic type")),
+            _ => Ok(context.i32_type().into()),
+        },
+        Type::Pointer(_inner, _, _) => Ok(context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0))
+            .into()),
+        _ => Ok(context.i32_type().into()),
     }
 }
 
 impl<'ctx, 'a> Codegen<'ctx, 'a> {
+    fn llvm_type(&self, ty: &Type) -> Result<inkwell::types::BasicTypeEnum<'ctx>> {
+        llvm_type_static(self.context, ty)
+    }
+
+    fn llvm_return_type(&self, ty: &Type) -> Result<inkwell::types::AnyTypeEnum<'ctx>> {
+        if let Type::Prim(PrimType::Void) = ty {
+            Ok(inkwell::types::AnyTypeEnum::VoidType(
+                self.context.void_type(),
+            ))
+        } else {
+            let bt = self.llvm_type(ty)?;
+            match bt {
+                inkwell::types::BasicTypeEnum::IntType(i) => {
+                    Ok(inkwell::types::AnyTypeEnum::IntType(i))
+                }
+                inkwell::types::BasicTypeEnum::FloatType(f) => {
+                    Ok(inkwell::types::AnyTypeEnum::FloatType(f))
+                }
+                inkwell::types::BasicTypeEnum::PointerType(p) => {
+                    Ok(inkwell::types::AnyTypeEnum::PointerType(p))
+                }
+                _ => Err(anyhow!("Unsupported basic type for return")),
+            }
+        }
+    }
     pub fn new(context: &'ctx Context, name: &str, source: &'a str) -> Self {
         let module = context.create_module(name);
         let builder = context.create_builder();
@@ -282,21 +324,46 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         }
     }
 
-    pub fn gen_module(&mut self, module: &ast::Module) -> Result<()> {
+    pub fn gen_module(
+        &mut self,
+        module: &izel_hir::HirModule,
+        mir_bodies: &HashMap<DefId, MirBody>,
+    ) -> Result<()> {
+        // First pass: Declare all functions
         for item in &module.items {
-            self.gen_item(item)?;
+            self.declare_item(item)?;
+        }
+
+        // Second pass: Generate all bodies
+        for item in &module.items {
+            self.gen_item(item, mir_bodies)?;
         }
         Ok(())
     }
 
-    fn gen_item(&mut self, item: &ast::Item) -> Result<()> {
+    fn declare_item(&mut self, item: &HirItem) -> Result<()> {
         match item {
-            ast::Item::Forge(f) => {
-                self.gen_forge(f)?;
+            HirItem::Forge(f) => {
+                let ret_type = self.llvm_return_type(&f.ret_type)?;
+                let mut arg_types = Vec::new();
+                for p in &f.params {
+                    arg_types.push(self.llvm_type(&p.ty)?.into());
+                }
+
+                let fn_type = match ret_type {
+                    inkwell::types::AnyTypeEnum::VoidType(v) => v.fn_type(&arg_types, false),
+                    inkwell::types::AnyTypeEnum::IntType(i) => i.fn_type(&arg_types, false),
+                    inkwell::types::AnyTypeEnum::FloatType(f) => f.fn_type(&arg_types, false),
+                    inkwell::types::AnyTypeEnum::PointerType(p) => p.fn_type(&arg_types, false),
+                    _ => return Err(anyhow!("Unsupported return type")),
+                };
+
+                let gen_name = format!("_iz_{}", f.name);
+                self.module.add_function(&gen_name, fn_type, None);
             }
-            ast::Item::Impl(i) => {
-                for it in &i.items {
-                    self.gen_item(it)?;
+            HirItem::Ward(w) => {
+                for it in &w.items {
+                    self.declare_item(it)?;
                 }
             }
             _ => {}
@@ -304,50 +371,50 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         Ok(())
     }
 
-    fn gen_forge(&mut self, f: &ast::Forge) -> Result<FunctionValue<'ctx>> {
-        // Check for intrinsic attribute
-        let mut intrinsic_name = None;
+    fn gen_item(&mut self, item: &HirItem, mir_bodies: &HashMap<DefId, MirBody>) -> Result<()> {
+        match item {
+            HirItem::Forge(f) => {
+                self.gen_forge(f, mir_bodies)?;
+            }
+            HirItem::Ward(w) => {
+                for it in &w.items {
+                    self.gen_item(it, mir_bodies)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn gen_forge(
+        &mut self,
+        f: &HirForge,
+        mir_bodies: &HashMap<DefId, MirBody>,
+    ) -> Result<FunctionValue<'ctx>> {
+        let gen_name = format!("_iz_{}", f.name);
+
+        let function = self
+            .module
+            .get_function(&gen_name)
+            .ok_or_else(|| anyhow!("Function not pre-declared: {}", gen_name))?;
+
+        // Check for @intrinsic
         for attr in &f.attributes {
             if attr.name == "intrinsic" {
                 if let Some(ast::Expr::Literal(ast::Literal::Str(name))) = attr.args.first() {
-                    intrinsic_name = Some(name.clone());
+                    let intrinsic_name = name.trim_matches('"');
+                    self.gen_intrinsic_body(function, intrinsic_name, &f.params)?;
+                    return Ok(function);
                 }
             }
         }
 
-        let i32_type = self.context.i32_type();
-        let f64_type = self.context.f64_type();
-        let bool_type = self.context.bool_type();
-
-        let ret_type = match &f.ret_type {
-            ast::Type::Prim(p) if p == "i32" => i32_type.as_basic_type_enum(),
-            ast::Type::Prim(p) if p == "f64" => f64_type.as_basic_type_enum(),
-            ast::Type::Prim(p) if p == "bool" => bool_type.as_basic_type_enum(),
-            _ => i32_type.as_basic_type_enum(), // Default for now
-        };
-
-        let mut arg_types = Vec::new();
-        for p in &f.params {
-            let ty = match &p.ty {
-                ast::Type::Prim(pt) if pt == "i32" => i32_type.as_basic_type_enum(),
-                ast::Type::Prim(pt) if pt == "f64" => f64_type.as_basic_type_enum(),
-                ast::Type::Prim(pt) if pt == "bool" => bool_type.as_basic_type_enum(),
-                _ => i32_type.as_basic_type_enum(),
-            };
-            arg_types.push(ty.into());
-        }
-
-        let fn_type = ret_type.fn_type(&arg_types, false);
-        let function = self.module.add_function(&f.name, fn_type, None);
-
-        if let Some(intrinsic) = intrinsic_name {
-            self.gen_intrinsic_body(function, &intrinsic, &f.params)?;
-        } else if let Some(_body) = &f.body {
-            let basic_block = self.context.append_basic_block(function, "entry");
-            self.builder.position_at_end(basic_block);
-
-            // Minimal body logic for now
-            self.builder.build_return(Some(&ret_type.const_zero()))?;
+        if let Some(body) = mir_bodies.get(&f.def_id) {
+            let mut mir_codegen = MirCodegen::new(self.context, &self.module, &self.builder);
+            mir_codegen.gen_mir_body(function, body)?;
+        } else if f.body.is_some() {
+            // If we have a body but no MIR, it might be an issue or just not lowered yet
+            // For now, we only support MIR-driven bodies for real execution
         }
 
         Ok(function)
@@ -357,7 +424,7 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         &mut self,
         function: FunctionValue<'ctx>,
         name: &str,
-        _params: &[ast::Param],
+        _params: &[izel_hir::HirParam],
     ) -> Result<()> {
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -405,6 +472,40 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 self.builder
                     .build_return(Some(&call.try_as_basic_value().left().unwrap()))?;
             }
+            "io_print_int" => {
+                let val = function.get_nth_param(0).unwrap();
+                let printf = self.get_printf()?;
+                let format_str = self.builder.build_global_string_ptr("%d\n", "format_int")?;
+                self.builder.build_call(
+                    printf,
+                    &[format_str.as_pointer_value().into(), val.into()],
+                    "printf",
+                )?;
+                self.builder.build_return(None)?;
+            }
+            "io_print_newline" => {
+                let printf = self.get_printf()?;
+                let format_str = self.builder.build_global_string_ptr("\n", "format_nl")?;
+                self.builder.build_call(
+                    printf,
+                    &[format_str.as_pointer_value().into()],
+                    "printf",
+                )?;
+                self.builder.build_return(None)?;
+            }
+            "mem_alloc" => {
+                let size = function.get_nth_param(0).unwrap().into_int_value();
+                let malloc = self.get_malloc()?;
+                let call = self.builder.build_call(malloc, &[size.into()], "malloc")?;
+                self.builder
+                    .build_return(Some(&call.try_as_basic_value().left().unwrap()))?;
+            }
+            "mem_free" => {
+                let ptr = function.get_nth_param(0).unwrap().into_pointer_value();
+                let free = self.get_free()?;
+                self.builder.build_call(free, &[ptr.into()], "free")?;
+                self.builder.build_return(None)?;
+            }
             "bool_not" => {
                 let val = function.get_nth_param(0).unwrap().into_int_value();
                 let res = self.builder.build_not(val, "not")?;
@@ -416,6 +517,45 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         }
 
         Ok(())
+    }
+
+    fn get_printf(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("printf") {
+            return Ok(f);
+        }
+        let i32_type = self.context.i32_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = i32_type.fn_type(&[ptr_type.into()], true);
+        Ok(self.module.add_function("printf", fn_type, None))
+    }
+
+    fn get_malloc(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("malloc") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let size_type = self.context.i64_type(); // Assuming 64-bit size_t for now
+        let fn_type = ptr_type.fn_type(&[size_type.into()], false);
+        Ok(self.module.add_function("malloc", fn_type, None))
+    }
+
+    fn get_free(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("free") {
+            return Ok(f);
+        }
+        let void_type = self.context.void_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = void_type.fn_type(&[ptr_type.into()], false);
+        Ok(self.module.add_function("free", fn_type, None))
     }
 
     fn get_intrinsic(&self, name: &str) -> Result<FunctionValue<'ctx>> {
@@ -460,15 +600,14 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
 
         unsafe {
             let main_fn = execution_engine
-                .get_function::<unsafe extern "C" fn() -> i32>("main")
-                .map_err(|e| anyhow!("Failed to find main function in JIT: {:?}", e))?;
+                .get_function::<unsafe extern "C" fn() -> i32>("_iz_main")
+                .map_err(|e| anyhow!("LLVM JIT Error: {}", e))?;
 
             println!("--- JIT Execution ---");
-            let result = main_fn.call();
-            println!("JIT Exit Code: {}", result);
-            println!("----------------------\n");
-
-            Ok(result)
+            let res = main_fn.call();
+            println!("JIT Exit Code: {}", res);
+            println!("----------------------");
+            Ok(res)
         }
     }
 }
@@ -476,8 +615,10 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use izel_hir::*;
     use izel_parser::ast;
     use izel_span::Span;
+    use izel_typeck::type_system::{PrimType, Type};
 
     #[test]
     fn test_intrinsic_codegen() -> Result<()> {
@@ -486,54 +627,55 @@ mod tests {
         let mut codegen = Codegen::new(&context, "test", source);
 
         // forge abs(val: i32) -> i32
-        let abs_forge = ast::Forge {
+        let abs_forge = HirForge {
             name: "abs".to_string(),
-            visibility: ast::Visibility::Hidden,
-            generic_params: vec![],
-            params: vec![ast::Param {
+            name_span: Span::dummy(),
+            def_id: DefId(1),
+            params: vec![HirParam {
                 name: "val".to_string(),
-                ty: ast::Type::Prim("i32".to_string()),
+                def_id: DefId(2),
+                ty: Type::Prim(PrimType::I32),
                 default_value: None,
                 is_variadic: false,
                 span: Span::dummy(),
             }],
-            ret_type: ast::Type::Prim("i32".to_string()),
-            effects: vec![],
-            is_flow: false,
+            ret_type: Type::Prim(PrimType::I32),
             attributes: vec![ast::Attribute {
                 name: "intrinsic".to_string(),
                 args: vec![ast::Expr::Literal(ast::Literal::Str("i32_abs".to_string()))],
                 span: Span::dummy(),
             }],
+            body: None,
             requires: vec![],
             ensures: vec![],
-            body: None,
             span: Span::dummy(),
         };
 
-        codegen.gen_item(&ast::Item::Forge(abs_forge))?;
+        let mir_bodies = HashMap::new();
+        let item = HirItem::Forge(Box::new(abs_forge));
+        codegen.declare_item(&item)?;
+        codegen.gen_item(&item, &mir_bodies)?;
 
         let ir = codegen.emit_llvm_ir();
         // println!("Generated IR:\n{}", ir);
         assert!(ir.contains("declare i32 @llvm.abs.i32(i32, i1")); // flexible match
-        assert!(ir.contains("define i32 @abs(i32 %0)"));
+        assert!(ir.contains("define i32 @_iz_abs(i32 %0)"));
         assert!(ir.contains("call i32 @llvm.abs.i32(i32 %0, i1 false)"));
 
         // Test bool_not
-        let not_forge = ast::Forge {
+        let not_forge = HirForge {
             name: "not".to_string(),
-            visibility: ast::Visibility::Hidden,
-            generic_params: vec![],
-            params: vec![ast::Param {
+            name_span: Span::dummy(),
+            def_id: DefId(3),
+            params: vec![HirParam {
                 name: "b".to_string(),
-                ty: ast::Type::Prim("bool".to_string()),
+                def_id: DefId(4),
+                ty: Type::Prim(PrimType::Bool),
                 default_value: None,
                 is_variadic: false,
                 span: Span::dummy(),
             }],
-            ret_type: ast::Type::Prim("bool".to_string()),
-            effects: vec![],
-            is_flow: false,
+            ret_type: Type::Prim(PrimType::Bool),
             attributes: vec![ast::Attribute {
                 name: "intrinsic".to_string(),
                 args: vec![ast::Expr::Literal(ast::Literal::Str(
@@ -541,31 +683,42 @@ mod tests {
                 ))],
                 span: Span::dummy(),
             }],
+            body: Some(HirBlock {
+                stmts: vec![HirStmt::Let {
+                    name: "x".to_string(),
+                    def_id: DefId(5),
+                    ty: Type::Prim(PrimType::I32),
+                    init: Some(HirExpr::Literal(ast::Literal::Int(30))),
+                    span: Span::dummy(),
+                }],
+                expr: None,
+                span: Span::dummy(),
+            }),
             requires: vec![],
             ensures: vec![],
-            body: None,
             span: Span::dummy(),
         };
 
-        codegen.gen_item(&ast::Item::Forge(not_forge))?;
+        let item2 = HirItem::Forge(Box::new(not_forge));
+        codegen.declare_item(&item2)?;
+        codegen.gen_item(&item2, &mir_bodies)?;
         let ir2 = codegen.emit_llvm_ir();
         assert!(ir2.contains("xor i1 %0, true"));
 
         // Test f64_sqrt
-        let sqrt_forge = ast::Forge {
+        let sqrt_forge = HirForge {
             name: "sqrt".to_string(),
-            visibility: ast::Visibility::Hidden,
-            generic_params: vec![],
-            params: vec![ast::Param {
+            name_span: Span::dummy(),
+            def_id: DefId(6),
+            params: vec![HirParam {
                 name: "v".to_string(),
-                ty: ast::Type::Prim("f64".to_string()),
+                def_id: DefId(7),
+                ty: Type::Prim(PrimType::F64),
                 default_value: None,
                 is_variadic: false,
                 span: Span::dummy(),
             }],
-            ret_type: ast::Type::Prim("f64".to_string()),
-            effects: vec![],
-            is_flow: false,
+            ret_type: Type::Prim(PrimType::F64),
             attributes: vec![ast::Attribute {
                 name: "intrinsic".to_string(),
                 args: vec![ast::Expr::Literal(ast::Literal::Str(
@@ -579,7 +732,9 @@ mod tests {
             span: Span::dummy(),
         };
 
-        codegen.gen_item(&ast::Item::Forge(sqrt_forge))?;
+        let item3 = HirItem::Forge(Box::new(sqrt_forge));
+        codegen.declare_item(&item3)?;
+        codegen.gen_item(&item3, &mir_bodies)?;
         let ir3 = codegen.emit_llvm_ir();
         assert!(ir3.contains("call double @llvm.sqrt.f64(double %0)"));
 
@@ -620,7 +775,7 @@ mod tests {
             // Local(0) = 10 + 20
             bb.instructions.push(Instruction::Assign(
                 Local(0),
-                Rvalue::BinaryOp(
+                Rvalue::Binary(
                     BinOp::Add,
                     Operand::Constant(Constant::Int(10)),
                     Operand::Constant(Constant::Int(20)),

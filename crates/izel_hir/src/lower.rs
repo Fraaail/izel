@@ -2,19 +2,34 @@ use crate::*;
 use izel_parser::ast;
 use izel_typeck::type_system::Type;
 
-pub struct HirLowerer {
-    // In a real compiler, this would be populated by the Resolver
+pub struct HirLowerer<'a> {
+    pub resolver: &'a izel_resolve::Resolver,
+    pub def_types: &'a rustc_hash::FxHashMap<izel_resolve::DefId, Type>,
 }
 
-impl Default for HirLowerer {
-    fn default() -> Self {
-        Self::new()
+impl<'a> HirLowerer<'a> {
+    pub fn new(
+        resolver: &'a izel_resolve::Resolver,
+        def_types: &'a rustc_hash::FxHashMap<izel_resolve::DefId, Type>,
+    ) -> Self {
+        Self {
+            resolver,
+            def_types,
+        }
     }
-}
 
-impl HirLowerer {
-    pub fn new() -> Self {
-        Self {}
+    fn get_def_id(&self, span: Span) -> DefId {
+        self.resolver
+            .def_ids
+            .read()
+            .unwrap()
+            .get(&span)
+            .cloned()
+            .unwrap_or(DefId(0))
+    }
+
+    fn get_type(&self, def_id: DefId) -> Type {
+        self.def_types.get(&def_id).cloned().unwrap_or(Type::Error)
     }
 
     pub fn lower_module(&self, module: &ast::Module) -> HirModule {
@@ -35,6 +50,8 @@ impl HirLowerer {
                     self.lower_item_to_vec(inner, items);
                 }
             }
+            ast::Item::Ward(w) => items.push(HirItem::Ward(self.lower_ward(w))),
+            ast::Item::Draw(d) => items.push(HirItem::Draw(self.lower_draw(d))),
             _ => {}
         }
     }
@@ -42,7 +59,7 @@ impl HirLowerer {
     fn lower_shape(&self, shape: &ast::Shape) -> HirShape {
         HirShape {
             name: shape.name.clone(),
-            def_id: izel_resolve::DefId(4), // Mock
+            def_id: self.get_def_id(shape.span),
             span: shape.span,
         }
     }
@@ -50,17 +67,46 @@ impl HirLowerer {
     fn lower_scroll(&self, scroll: &ast::Scroll) -> HirScroll {
         HirScroll {
             name: scroll.name.clone(),
-            def_id: izel_resolve::DefId(5), // Mock
+            def_id: self.get_def_id(scroll.span),
             span: scroll.span,
         }
     }
 
+    fn lower_ward(&self, ward: &ast::Ward) -> HirWard {
+        let mut items = Vec::new();
+        for item in &ward.items {
+            self.lower_item_to_vec(item, &mut items);
+        }
+        HirWard {
+            name: ward.name.clone(),
+            items,
+            span: ward.span,
+        }
+    }
+
+    fn lower_draw(&self, draw: &ast::Draw) -> HirDraw {
+        HirDraw {
+            path: draw.path.clone(),
+            def_id: None,
+            is_wildcard: draw.is_wildcard,
+            span: draw.span,
+        }
+    }
+
     fn lower_forge(&self, forge: &ast::Forge) -> HirForge {
+        let forge_def_id = self.get_def_id(forge.name_span);
+        let full_ty = self.get_type(forge_def_id);
+        let ret_type = match full_ty {
+            Type::Function { ret, .. } => *ret,
+            _ => Type::Error,
+        };
         HirForge {
             name: forge.name.clone(),
-            def_id: izel_resolve::DefId(0), // Mock
+            name_span: forge.name_span,
+            def_id: forge_def_id,
             params: forge.params.iter().map(|p| self.lower_param(p)).collect(),
-            ret_type: Type::Error,
+            ret_type,
+            attributes: forge.attributes.clone(),
             body: forge.body.as_ref().map(|b| self.lower_block(b)),
             requires: forge.requires.iter().map(|e| self.lower_expr(e)).collect(),
             ensures: forge.ensures.iter().map(|e| self.lower_expr(e)).collect(),
@@ -69,10 +115,12 @@ impl HirLowerer {
     }
 
     fn lower_param(&self, param: &ast::Param) -> HirParam {
+        let def_id = self.get_def_id(param.span);
+        let ty = self.get_type(def_id);
         HirParam {
             name: param.name.clone(),
-            def_id: izel_resolve::DefId(1), // Mock
-            ty: Type::Error,
+            def_id,
+            ty,
             default_value: param.default_value.as_ref().map(|e| self.lower_expr(e)),
             is_variadic: param.is_variadic,
             span: param.span,
@@ -91,16 +139,24 @@ impl HirLowerer {
         match stmt {
             ast::Stmt::Let {
                 pat, init, span, ..
-            } => HirStmt::Let {
-                name: match pat {
-                    ast::Pattern::Ident(n, _) => n.clone(),
-                    _ => "_hir_pattern_unsupported".to_string(),
-                },
-                def_id: izel_resolve::DefId(2), // Mock
-                ty: Type::Error,
-                init: init.as_ref().map(|e| self.lower_expr(e)),
-                span: *span,
-            },
+            } => {
+                let (name, name_span) = match pat {
+                    ast::Pattern::Ident(name, _, span) => (name.clone(), *span),
+                    _ => ("_hir_pattern_unsupported".to_string(), *span),
+                };
+                let def_id = self.get_def_id(name_span);
+
+                let ty = self.get_type(def_id);
+                eprintln!("HIR Let: name={}, def_id={:?}, ty={:?}", name, def_id, ty);
+
+                HirStmt::Let {
+                    name,
+                    def_id,
+                    ty,
+                    init: init.as_ref().map(|e| self.lower_expr(e)),
+                    span: *span,
+                }
+            }
             ast::Stmt::Expr(e) => HirStmt::Expr(self.lower_expr(e)),
         }
     }
@@ -108,8 +164,9 @@ impl HirLowerer {
     fn lower_expr(&self, expr: &ast::Expr) -> HirExpr {
         match expr {
             ast::Expr::Literal(lit) => HirExpr::Literal(lit.clone()),
-            ast::Expr::Ident(_name, span) => {
-                HirExpr::Ident(izel_resolve::DefId(3), Type::Error, *span)
+            ast::Expr::Ident(name, span) => {
+                let def_id = self.get_def_id(*span);
+                HirExpr::Ident(name.clone(), def_id, self.get_type(def_id), *span)
             }
             ast::Expr::Binary(op, left, right) => HirExpr::Binary(
                 op.clone(),
@@ -120,18 +177,35 @@ impl HirLowerer {
             ast::Expr::Unary(op, inner) => {
                 HirExpr::Unary(op.clone(), Box::new(self.lower_expr(inner)), Type::Error)
             }
-            ast::Expr::Call(callee, args) => HirExpr::Call(
-                Box::new(self.lower_expr(callee)),
-                args.iter().map(|a| self.lower_expr(&a.value)).collect(),
-                vec![], // requires (to be populated by resolver)
-                Type::Error,
-            ),
-            ast::Expr::Member(inner, _name, span) => HirExpr::Call(
-                Box::new(HirExpr::Ident(izel_resolve::DefId(6), Type::Error, *span)), // Mock for member access as call
-                vec![self.lower_expr(inner)],
-                vec![],
-                Type::Error,
-            ),
+            ast::Expr::Call(callee, args) => {
+                let callee_hir = self.lower_expr(callee);
+                let mut ret_type = Type::Error;
+                if let HirExpr::Ident(_, def_id, _, _) = &callee_hir {
+                    if let Type::Function { ret, .. } = self.get_type(*def_id) {
+                        ret_type = (*ret).clone();
+                    }
+                }
+                HirExpr::Call(
+                    Box::new(callee_hir),
+                    args.iter().map(|a| self.lower_expr(&a.value)).collect(),
+                    vec![],
+                    ret_type,
+                )
+            }
+            ast::Expr::Member(inner, name, span) => {
+                let def_id = self.get_def_id(*span);
+                HirExpr::Call(
+                    Box::new(HirExpr::Ident(
+                        name.clone(),
+                        def_id,
+                        self.get_type(def_id),
+                        *span,
+                    )),
+                    vec![self.lower_expr(inner)],
+                    vec![],
+                    Type::Error, // Member access return type handled by typeck later or can be looked up
+                )
+            }
             ast::Expr::Given {
                 cond,
                 then_block,

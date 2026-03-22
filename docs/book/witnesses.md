@@ -1,0 +1,3 @@
+# Witness Types
+
+This chapter will cover witness types in Izel...

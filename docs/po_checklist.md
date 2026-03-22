@@ -87,9 +87,9 @@
 - [x] Generic Types and Implementation
 
 ## 17. The Effect System
-- [ ] 17.1 Built-in Effects
-- [ ] 17.2 Declaring Effects
-- [ ] 17.3 Effect Propagation
+- [x] 17.1 Built-in Effects
+- [x] 17.2 Declaring Effects
+- [x] 17.3 Effect Propagation
 - [ ] 17.4 Effect Boundaries
 - [ ] 17.5 Effect-Based Testing
 
@@ -111,9 +111,9 @@
 - [ ] Implementation of `echo` nodes
 
 ## 23. Modules & Visibility — `ward`
-- [ ] 23.1 Defining & Nesting Wards
-- [ ] 23.2 `draw` — Import Statement
-- [ ] 23.3 File-Based Wards
+- [x] 23.1 Defining & Nesting Wards
+- [x] 23.2 `draw` — Import Statement
+- [x] 23.3 File-Based Wards
 
 ## 24. Macros & Meta-Programming
 - [ ] 24.1 Declarative Macros
