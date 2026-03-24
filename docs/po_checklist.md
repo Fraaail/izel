@@ -116,7 +116,7 @@
 - [x] 23.3 File-Based Wards
 
 ## 24. Macros & Meta-Programming
-- [ ] 24.1 Declarative Macros
+- [x] 24.1 Declarative Macros
 - [ ] 24.2 `#[derive(...)]` — Built-in Derivable Weaves
 - [ ] 24.3 Attribute Macros
 

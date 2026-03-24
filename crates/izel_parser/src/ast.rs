@@ -32,6 +32,7 @@ pub enum Item {
     Alias(Alias),
     Ward(Ward),
     Draw(Draw),
+    Macro(MacroDecl),
     Static(Static),
     Echo(Echo),
     Bridge(Bridge),
@@ -157,6 +158,21 @@ pub struct Ward {
 pub struct Draw {
     pub path: Vec<String>,
     pub is_wildcard: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MacroDecl {
+    pub name: String,
+    pub params: Vec<MacroParam>,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MacroParam {
+    pub name: String,
+    pub is_variadic: bool,
     pub span: Span,
 }
 

@@ -299,6 +299,7 @@ impl TypeChecker {
             ast::Item::Echo(e) => {
                 self.check_echo(e);
             }
+            ast::Item::Macro(_) => {}
             ast::Item::Bridge(b) => {
                 for it in &b.items {
                     self.check_item(it);
@@ -820,6 +821,7 @@ impl TypeChecker {
                     );
                 }
             }
+            ast::Item::Macro(_) => {}
             ast::Item::Bridge(b) => {
                 if self.has_error_attr(&b.attributes) {
                     self.diagnostics.push(
@@ -3379,6 +3381,33 @@ mod tests {
                 .iter()
                 .any(|d| d.message.contains("not compile-time evaluable")),
             "non-const echo initializer should emit compile-time evaluability diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_declarative_macro_expansion_typechecks() {
+        let source = r#"
+            macro add_one(x) { x + 1 }
+
+            forge main() {
+                let y: i32 = add_one!(41)
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "declarative macro expansion should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
         );
     }
 
