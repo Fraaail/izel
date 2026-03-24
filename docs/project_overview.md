@@ -2169,7 +2169,7 @@ izel/
 
 - [x] Full MIR optimizer (all passes)
 - [x] SIMD intrinsics
-- [ ] Full `comptime` evaluation
+- [x] Full `comptime` evaluation
 - [ ] Comprehensive snapshot + integration test suite
 - [ ] CI/CD with coverage + nightly fuzz runs
 - [ ] Language specification v1.0 (normative)
