@@ -86,4 +86,41 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn std_concurrency_exposes_thread_and_channel_surface() {
+        let thread_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../library/std/thread.iz");
+        let chan_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../library/std/chan.iz");
+
+        let thread_src = fs::read_to_string(&thread_path)
+            .unwrap_or_else(|e| panic!("failed to read {:?}: {}", thread_path, e));
+        let chan_src = fs::read_to_string(&chan_path)
+            .unwrap_or_else(|e| panic!("failed to read {:?}: {}", chan_path, e));
+
+        let required_thread = ["shape JoinHandle<", "forge join(", "forge spawn<"];
+        let required_chan = [
+            "shape Sender<",
+            "shape Receiver<",
+            "forge send(",
+            "flow forge recv(",
+            "forge new<",
+        ];
+
+        for symbol in required_thread {
+            assert!(
+                thread_src.contains(symbol),
+                "missing std::thread declaration: {}",
+                symbol
+            );
+        }
+
+        for symbol in required_chan {
+            assert!(
+                chan_src.contains(symbol),
+                "missing std::chan declaration: {}",
+                symbol
+            );
+        }
+    }
 }

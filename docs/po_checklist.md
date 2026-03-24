@@ -121,7 +121,7 @@
 - [x] 24.3 Attribute Macros
 
 ## 25. Concurrency & Async — `flow` / `tide`
-- [ ] 25.1 Threads & Channels
+- [x] 25.1 Threads & Channels
 - [x] 25.2 `flow` / `tide` — Async Functions & Await
 - [ ] 25.3 Atomic Types
 
