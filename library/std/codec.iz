@@ -1,0 +1,13 @@
+// library/std/codec.iz
+
+shape Base64 {
+}
+
+shape Hex {
+}
+
+open forge encode_base64(data: &[u8]) -> str
+open forge decode_base64(text: str) -> Result<Vec<u8>, ()>
+
+open forge encode_hex(data: &[u8]) -> str
+open forge decode_hex(text: str) -> Result<Vec<u8>, ()>

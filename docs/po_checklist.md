@@ -163,7 +163,7 @@
 - [x] Allocation & Collections
 - [x] I/O & OS
 - [x] Concurrency
-- [ ] Math, Hash, Codec
+- [x] Math, Hash, Codec
 - [ ] Testing
 
 ## 32. Toolchain

@@ -344,4 +344,71 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn std_math_hash_codec_exposes_surface() {
+        let checks: [(&str, &[&str]); 5] = [
+            (
+                "math.iz",
+                &[
+                    "forge sin",
+                    "forge cos",
+                    "forge tan",
+                    "forge exp",
+                    "forge ln",
+                    "forge log",
+                    "PI",
+                    "E",
+                    "INFINITY",
+                    "NAN",
+                ],
+            ),
+            (
+                "hash.iz",
+                &[
+                    "weave Hash",
+                    "weave Hasher",
+                    "shape DefaultHasher",
+                    "forge finish",
+                ],
+            ),
+            ("crypt.iz", &["BLAKE3", "SHA-2", "forge constant_time_eq"]),
+            (
+                "codec.iz",
+                &[
+                    "shape Base64",
+                    "shape Hex",
+                    "forge encode_base64",
+                    "forge decode_base64",
+                    "forge encode_hex",
+                    "forge decode_hex",
+                ],
+            ),
+            (
+                "json.iz",
+                &[
+                    "JSON",
+                    "round-trip",
+                    "forge encode_json",
+                    "forge decode_json",
+                ],
+            ),
+        ];
+
+        for (file_name, required) in checks {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../library/std/{}", file_name));
+            let src = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+
+            for symbol in required {
+                assert!(
+                    src.contains(symbol),
+                    "missing std::{} declaration: {}",
+                    file_name,
+                    symbol
+                );
+            }
+        }
+    }
 }

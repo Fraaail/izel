@@ -1,0 +1,13 @@
+// library/std/json.iz
+
+// JSON support is specified as a dual conversion with round-trip guarantees.
+shape JsonCodec {
+}
+
+weave JsonSerializable {
+    forge to_json(&self) -> str
+    forge from_json(src: str) -> Result<Self, ()>
+}
+
+open forge encode_json<T: JsonSerializable>(value: &T) -> str
+open forge decode_json<T: JsonSerializable>(src: str) -> Result<T, ()>

@@ -1,0 +1,27 @@
+// library/std/hash.iz
+
+weave Hasher {
+    forge write(&~self, bytes: &[u8])
+    forge finish(&~self) -> u64
+}
+
+weave Hash {
+    forge hash<H: Hasher>(&self, state: &~H)
+}
+
+shape DefaultHasher {
+    state: u64,
+}
+
+impl Hasher for DefaultHasher {
+    forge write(&~self, bytes: &[u8]) {
+    }
+
+    forge finish(&~self) -> u64 {
+        0
+    }
+}
+
+open forge default_hasher() -> DefaultHasher {
+    DefaultHasher { state: 0 }
+}
