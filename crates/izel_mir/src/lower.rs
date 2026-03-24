@@ -515,6 +515,46 @@ mod tests {
     }
 
     #[test]
+    fn test_witness_typed_call_skips_runtime_assertions() {
+        let mut lowerer = MirLowerer::new();
+        let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
+        let nz_ty = Type::BuiltinWitness(
+            izel_typeck::type_system::BuiltinWitness::NonZero,
+            Box::new(i32_ty.clone()),
+        );
+
+        // Simulate calling divide(a: i32, b: NonZero<i32>) where proof is
+        // encoded in the type and no @requires runtime assertion is needed.
+        let callee = Box::new(HirExpr::Ident(
+            "divide".to_string(),
+            DefId(30),
+            Type::Error,
+            izel_span::Span::dummy(),
+        ));
+
+        let a_expr = HirExpr::Literal(izel_parser::ast::Literal::Int(42));
+        let b_expr = HirExpr::Ident("nz".to_string(), DefId(31), nz_ty, izel_span::Span::dummy());
+
+        let call_expr = HirExpr::Call(callee, vec![a_expr, b_expr], vec![], i32_ty);
+        lowerer.lower_expr(&call_expr);
+
+        let mir = &lowerer.body;
+        let mut found_assert = false;
+        for node in mir.blocks.node_indices() {
+            for inst in &mir.blocks[node].instructions {
+                if let Instruction::Assert(_, _) = inst {
+                    found_assert = true;
+                }
+            }
+        }
+
+        assert!(
+            !found_assert,
+            "witness-typed call should not emit runtime contract asserts"
+        );
+    }
+
+    #[test]
     fn test_zone_lowering() {
         let mut lowerer = MirLowerer::new();
         let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
