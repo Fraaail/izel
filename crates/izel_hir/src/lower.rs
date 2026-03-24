@@ -45,6 +45,7 @@ impl<'a> HirLowerer<'a> {
             ast::Item::Forge(f) => items.push(HirItem::Forge(Box::new(self.lower_forge(f)))),
             ast::Item::Shape(s) => items.push(HirItem::Shape(self.lower_shape(s))),
             ast::Item::Scroll(s) => items.push(HirItem::Scroll(self.lower_scroll(s))),
+            ast::Item::Echo(e) => items.push(HirItem::Echo(self.lower_echo(e))),
             ast::Item::Dual(d) => {
                 for inner in &d.items {
                     self.lower_item_to_vec(inner, items);
@@ -69,6 +70,13 @@ impl<'a> HirLowerer<'a> {
             name: scroll.name.clone(),
             def_id: self.get_def_id(scroll.span),
             span: scroll.span,
+        }
+    }
+
+    fn lower_echo(&self, echo: &ast::Echo) -> HirEcho {
+        HirEcho {
+            body: self.lower_block(&echo.body),
+            span: echo.span,
         }
     }
 

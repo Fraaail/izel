@@ -297,7 +297,7 @@ impl TypeChecker {
                 self.verify_dual(d);
             }
             ast::Item::Echo(e) => {
-                self.check_block(&e.body);
+                self.check_echo(e);
             }
             ast::Item::Bridge(b) => {
                 for it in &b.items {
@@ -343,6 +343,86 @@ impl TypeChecker {
                     d.name
                 );
             }
+        }
+    }
+
+    fn check_echo(&mut self, e: &ast::Echo) {
+        let body_effects = self.new_effect_var();
+        self.current_effects.push(body_effects.clone());
+        self.check_block(&e.body);
+        let collected = self.current_effects.pop().unwrap();
+
+        if !self.effect_set_is_pure(&collected) {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(
+                    "echo block must be pure and cannot use runtime effects".to_string(),
+                ));
+        }
+
+        let mut const_context: std::collections::HashMap<String, ConstValue> =
+            std::collections::HashMap::new();
+
+        for stmt in &e.body.stmts {
+            match stmt {
+                ast::Stmt::Let { pat, init, .. } => {
+                    let Some(init_expr) = init else {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(
+                                "echo let binding requires an initializer".to_string(),
+                            ),
+                        );
+                        continue;
+                    };
+
+                    let value = eval_expr(init_expr, &const_context);
+                    if value == ConstValue::Unknown {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(
+                                "echo initializer is not compile-time evaluable".to_string(),
+                            ));
+                        continue;
+                    }
+
+                    if let ast::Pattern::Ident(name, _, _) = pat {
+                        const_context.insert(name.clone(), value);
+                    } else {
+                        self.diagnostics
+                            .push(
+                                izel_diagnostics::Diagnostic::error().with_message(
+                                    "echo let bindings currently require identifier patterns"
+                                        .to_string(),
+                                ),
+                            );
+                    }
+                }
+                ast::Stmt::Expr(expr) => {
+                    if eval_expr(expr, &const_context) == ConstValue::Unknown {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(
+                                "echo statement is not compile-time evaluable".to_string(),
+                            ));
+                    }
+                }
+            }
+        }
+
+        if let Some(expr) = &e.body.expr {
+            if eval_expr(expr, &const_context) == ConstValue::Unknown {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(
+                        "echo trailing expression is not compile-time evaluable".to_string(),
+                    ));
+            }
+        }
+    }
+
+    fn effect_set_is_pure(&self, set: &EffectSet) -> bool {
+        match self.prune_effects(set) {
+            EffectSet::Concrete(v) => v.is_empty() || v.iter().all(|e| *e == Effect::Pure),
+            EffectSet::Row(vals, tail) => {
+                vals.iter().all(|e| *e == Effect::Pure) && self.effect_set_is_pure(&tail)
+            }
+            EffectSet::Var(_) | EffectSet::Param(_) => true,
         }
     }
 
@@ -739,8 +819,6 @@ impl TypeChecker {
                         ),
                     );
                 }
-                // Compile-time execution stub
-                self.check_block(&e.body);
             }
             ast::Item::Bridge(b) => {
                 if self.has_error_attr(&b.attributes) {
@@ -3204,6 +3282,103 @@ mod tests {
         assert!(
             tc.resolve_scheme("decode").is_some(),
             "Elaborated dual method 'decode' must be registered"
+        );
+    }
+
+    #[test]
+    fn test_echo_const_eval_accepts_compile_time_expressions() {
+        let source = r#"
+            echo {
+                let a = 40 + 2
+                let b = a * 2
+                b
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "compile-time evaluable echo should pass, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_echo_rejects_effectful_calls() {
+        let mut tc = TypeChecker::new();
+        tc.define(
+            "log".to_string(),
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Prim(PrimType::Void)),
+                effects: EffectSet::Concrete(vec![Effect::IO]),
+            },
+        );
+
+        let echo = ast::Echo {
+            body: ast::Block {
+                stmts: vec![ast::Stmt::Expr(ast::Expr::Call(
+                    Box::new(ast::Expr::Ident(
+                        "log".to_string(),
+                        izel_span::Span::dummy(),
+                    )),
+                    vec![],
+                ))],
+                expr: None,
+                span: izel_span::Span::dummy(),
+            },
+            attributes: vec![],
+            span: izel_span::Span::dummy(),
+        };
+
+        let module = ast::Module {
+            items: vec![ast::Item::Echo(echo)],
+        };
+
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("echo block must be pure")),
+            "effectful echo should emit purity diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_echo_rejects_non_const_initializers() {
+        let source = r#"
+            forge get() -> i32 { 1 }
+
+            echo {
+                let x = get()
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("not compile-time evaluable")),
+            "non-const echo initializer should emit compile-time evaluability diagnostic"
         );
     }
 

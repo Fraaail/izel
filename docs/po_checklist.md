@@ -108,7 +108,7 @@
 - [x] Dual shapes parsing and elaboration
 
 ## 22. Compile-Time Evaluation — `echo`
-- [ ] Implementation of `echo` nodes
+- [x] Implementation of `echo` nodes
 
 ## 23. Modules & Visibility — `ward`
 - [x] 23.1 Defining & Nesting Wards
