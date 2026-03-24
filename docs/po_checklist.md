@@ -123,7 +123,7 @@
 ## 25. Concurrency & Async — `flow` / `tide`
 - [x] 25.1 Threads & Channels
 - [x] 25.2 `flow` / `tide` — Async Functions & Await
-- [ ] 25.3 Atomic Types
+- [x] 25.3 Atomic Types
 
 ## 26. Raw Blocks & FFI — `raw` / `bridge`
 - [ ] 26.1 `raw` Blocks

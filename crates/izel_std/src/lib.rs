@@ -123,4 +123,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn std_sync_exposes_atomic_surface() {
+        let sync_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../library/std/sync.iz");
+
+        let src = fs::read_to_string(&sync_path)
+            .unwrap_or_else(|e| panic!("failed to read {:?}: {}", sync_path, e));
+
+        let required = [
+            "scroll Ordering",
+            "Relaxed",
+            "Acquire",
+            "Release",
+            "AcqRel",
+            "SeqCst",
+            "shape Atomic<",
+            "forge new(value: T) -> Atomic<T>",
+            "forge load(&~self, _order: Ordering) -> T",
+            "forge store(&~self, value: T, _order: Ordering)",
+            "forge swap(&~self, value: T, _order: Ordering) -> T",
+            "forge compare_exchange(",
+            "forge fetch_add(&~self, val: T, _order: Ordering) -> T",
+        ];
+
+        for symbol in required {
+            assert!(
+                src.contains(symbol),
+                "missing std::sync declaration: {}",
+                symbol
+            );
+        }
+    }
 }
