@@ -11,6 +11,12 @@ pub mod contracts;
 pub use izel_parser::contracts::ContractChecker;
 pub use izel_parser::eval::{eval_expr, ConstValue};
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShapeLayout {
+    pub packed: bool,
+    pub align: Option<u32>,
+}
+
 pub struct TypeChecker {
     /// Resolved types for each DefId
     pub def_types: FxHashMap<DefId, Type>,
@@ -19,6 +25,7 @@ pub struct TypeChecker {
     pub substitutions: FxHashMap<usize, Type>,
     pub effect_substitutions: FxHashMap<usize, EffectSet>,
     pub env: Vec<FxHashMap<String, Scheme>>,
+    pub overload_env: FxHashMap<String, Vec<Scheme>>,
     pub expected_ret: Option<Type>,
     pub current_level: usize,
     pub var_levels: FxHashMap<usize, usize>,
@@ -32,7 +39,16 @@ pub struct TypeChecker {
     pub in_raw_block: bool,
     pub diagnostics: Vec<izel_diagnostics::Diagnostic>,
     pub shape_invariants: FxHashMap<String, Vec<ast::Expr>>,
-    pub method_env: FxHashMap<String, FxHashMap<String, Scheme>>,
+    pub shape_layouts: FxHashMap<String, ShapeLayout>,
+    pub custom_error_types: std::collections::HashSet<String>,
+    pub derived_weaves: FxHashMap<String, std::collections::HashSet<String>>,
+    pub test_forges: std::collections::HashSet<String>,
+    pub bench_forges: std::collections::HashSet<String>,
+    pub inline_forges: FxHashMap<String, Option<String>>,
+    pub deprecated_forges: FxHashMap<String, Vec<String>>,
+    pub effect_boundaries: FxHashMap<String, Vec<Effect>>,
+    zone_scope_depth: usize,
+    pub method_env: FxHashMap<String, FxHashMap<String, Vec<Scheme>>>,
     pub current_self: Option<Type>,
     pub in_flow_context: bool,
     pub ast_modules: std::collections::HashMap<String, ast::Module>,
@@ -54,6 +70,7 @@ impl TypeChecker {
             substitutions: FxHashMap::default(),
             effect_substitutions: FxHashMap::default(),
             env: vec![FxHashMap::default()], // Global scope
+            overload_env: FxHashMap::default(),
             expected_ret: None,
             current_level: 0,
             var_levels: FxHashMap::default(),
@@ -67,6 +84,15 @@ impl TypeChecker {
             in_raw_block: false,
             diagnostics: Vec::new(),
             shape_invariants: FxHashMap::default(),
+            shape_layouts: FxHashMap::default(),
+            custom_error_types: std::collections::HashSet::default(),
+            derived_weaves: FxHashMap::default(),
+            test_forges: std::collections::HashSet::default(),
+            bench_forges: std::collections::HashSet::default(),
+            inline_forges: FxHashMap::default(),
+            deprecated_forges: FxHashMap::default(),
+            effect_boundaries: FxHashMap::default(),
+            zone_scope_depth: 0,
             method_env: FxHashMap::default(),
             current_self: None,
             in_flow_context: false,
@@ -193,6 +219,19 @@ impl TypeChecker {
         }
     }
 
+    fn register_overload(&mut self, name: String, scheme: Scheme) {
+        self.overload_env.entry(name).or_default().push(scheme);
+    }
+
+    fn register_method_overload(&mut self, target: &str, method: &str, scheme: Scheme) {
+        self.method_env
+            .entry(target.to_string())
+            .or_default()
+            .entry(method.to_string())
+            .or_default()
+            .push(scheme);
+    }
+
     pub fn resolve_scheme(&self, name: &str) -> Option<Scheme> {
         for (_i, scope) in self.env.iter().enumerate().rev() {
             if let Some(s) = scope.get(name) {
@@ -248,7 +287,6 @@ impl TypeChecker {
                 self.check_forge(f);
             }
             ast::Item::Impl(i) => {
-                dbg!(&i.target);
                 let old_self = self.current_self.clone();
                 self.current_self = Some(self.lower_ast_type(&i.target));
                 self.check_impl(i);
@@ -269,8 +307,9 @@ impl TypeChecker {
                 self.verify_dual(d);
             }
             ast::Item::Echo(e) => {
-                self.check_block(&e.body);
+                self.check_echo(e);
             }
+            ast::Item::Macro(_) => {}
             ast::Item::Bridge(b) => {
                 for it in &b.items {
                     self.check_item(it);
@@ -294,6 +333,15 @@ impl TypeChecker {
             }
         }
 
+        if encode_fn.is_none() || decode_fn.is_none() {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "dual '{}' must define or elaborate both encode and decode forges",
+                    d.name
+                )));
+            return;
+        }
+
         if let (Some(encode), Some(decode)) = (encode_fn, decode_fn) {
             let is_pure = encode.effects.is_empty() && decode.effects.is_empty();
             if is_pure {
@@ -309,8 +357,348 @@ impl TypeChecker {
         }
     }
 
+    fn validate_shape_derives(&mut self, shape: &ast::Shape) {
+        let mut derives = std::collections::HashSet::new();
+
+        for attr in &shape.attributes {
+            if attr.name != "derive" {
+                continue;
+            }
+
+            if attr.args.is_empty() {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[derive] on shape '{}' requires at least one derive target",
+                        shape.name
+                    )));
+                continue;
+            }
+
+            for arg in &attr.args {
+                let derive_name = match arg {
+                    ast::Expr::Ident(name, _) => Some(name.clone()),
+                    ast::Expr::Path(parts, _) if !parts.is_empty() => parts.last().cloned(),
+                    _ => None,
+                };
+
+                let Some(name) = derive_name else {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "invalid derive target on shape '{}': expected identifier",
+                            shape.name
+                        )));
+                    continue;
+                };
+
+                if !Self::is_supported_builtin_derive(&name) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "unsupported built-in derive '{}' on shape '{}'",
+                            name, shape.name
+                        )));
+                    continue;
+                }
+
+                derives.insert(name);
+            }
+        }
+
+        if !derives.is_empty() {
+            self.derived_weaves.insert(shape.name.clone(), derives);
+        }
+    }
+
+    fn is_supported_builtin_derive(name: &str) -> bool {
+        matches!(
+            name,
+            "Debug"
+                | "Display"
+                | "Clone"
+                | "Copy"
+                | "Eq"
+                | "PartialEq"
+                | "Ord"
+                | "PartialOrd"
+                | "Hash"
+                | "Default"
+                | "Serialize"
+                | "Deserialize"
+                | "Builder"
+                | "Error"
+        )
+    }
+
+    fn is_attribute_macro(name: &str) -> bool {
+        matches!(name, "test" | "bench" | "inline" | "deprecated")
+    }
+
+    fn validate_forge_attribute_macros(&mut self, f: &ast::Forge) {
+        let mut has_test = false;
+        let mut has_bench = false;
+
+        for attr in &f.attributes {
+            match attr.name.as_str() {
+                "test" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "forge '{}' has invalid #[test] usage: expected no arguments",
+                                f.name
+                            )));
+                    }
+                    has_test = true;
+                    self.test_forges.insert(f.name.clone());
+                }
+                "bench" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "forge '{}' has invalid #[bench] usage: expected no arguments",
+                                f.name
+                            )));
+                    }
+                    has_bench = true;
+                    self.bench_forges.insert(f.name.clone());
+                }
+                "inline" => {
+                    if attr.args.len() > 1 {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "forge '{}' has invalid #[inline] usage: expected zero or one argument",
+                            f.name
+                        )));
+                        continue;
+                    }
+
+                    let mode = if let Some(arg) = attr.args.first() {
+                        match arg {
+                            ast::Expr::Ident(name, _) => Some(name.clone()),
+                            ast::Expr::Path(parts, _) if !parts.is_empty() => parts.last().cloned(),
+                            _ => {
+                                self.diagnostics.push(
+                                    izel_diagnostics::Diagnostic::error().with_message(format!(
+                                        "forge '{}' has invalid #[inline] argument",
+                                        f.name
+                                    )),
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(m) = mode.as_deref() {
+                        if m != "always" && m != "never" {
+                            self.diagnostics.push(
+                                izel_diagnostics::Diagnostic::error().with_message(format!(
+                                    "forge '{}' has invalid #[inline] mode '{}': expected always or never",
+                                    f.name, m
+                                )),
+                            );
+                        }
+                    }
+
+                    self.inline_forges.insert(f.name.clone(), mode);
+                }
+                "deprecated" => {
+                    let mut notes = Vec::new();
+                    for arg in &attr.args {
+                        match arg {
+                            ast::Expr::Literal(ast::Literal::Str(s)) => notes.push(s.clone()),
+                            ast::Expr::Ident(name, _) => notes.push(name.clone()),
+                            ast::Expr::Path(parts, _) if !parts.is_empty() => {
+                                notes.push(parts.join("::"))
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.deprecated_forges.insert(f.name.clone(), notes);
+                }
+                _ => {}
+            }
+        }
+
+        if has_test && has_bench {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "forge '{}' cannot use #[test] and #[bench] together",
+                    f.name
+                )));
+        }
+    }
+
+    fn validate_non_forge_attribute_macros(&mut self, attrs: &[ast::Attribute], target: &str) {
+        for attr in attrs {
+            if Self::is_attribute_macro(&attr.name) {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "attribute macro #[{}] can only be applied to forge declarations, found on {}",
+                    attr.name, target
+                )));
+            }
+        }
+    }
+
+    fn validate_bridge_declarations(&mut self, b: &ast::Bridge) {
+        match b.abi.as_deref() {
+            Some("C") | Some("C++") => {}
+            Some(other) => {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "bridge ABI '{}' is not supported; expected \"C\" or \"C++\"",
+                        other
+                    )));
+            }
+            None => {
+                self.diagnostics.push(
+                    izel_diagnostics::Diagnostic::error().with_message(
+                        "bridge declaration requires an explicit ABI string (for example, \"C\")"
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+
+        for item in &b.items {
+            match item {
+                ast::Item::Forge(f) => {
+                    if f.body.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "bridge forge '{}' must be a declaration without a body",
+                                f.name
+                            )));
+                    }
+                }
+                ast::Item::Static(st) => {
+                    if st.value.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "bridge static '{}' cannot define an initializer",
+                                st.name
+                            )));
+                    }
+                }
+                _ => {
+                    self.diagnostics
+                        .push(
+                            izel_diagnostics::Diagnostic::error().with_message(
+                                "bridge blocks may only contain forge and static declarations"
+                                    .to_string(),
+                            ),
+                        );
+                }
+            }
+        }
+    }
+
+    fn validate_inline_asm_call(&mut self, args: &[ast::Arg]) {
+        if !self.in_raw_block {
+            self.diagnostics.push(
+                izel_diagnostics::Diagnostic::error()
+                    .with_message("asm! is only allowed inside raw blocks".to_string()),
+            );
+        }
+
+        if args.is_empty() {
+            self.diagnostics.push(
+                izel_diagnostics::Diagnostic::error()
+                    .with_message("asm! requires at least a template string argument".to_string()),
+            );
+            return;
+        }
+
+        if !matches!(args[0].value, ast::Expr::Literal(ast::Literal::Str(_))) {
+            self.diagnostics.push(
+                izel_diagnostics::Diagnostic::error().with_message(
+                    "asm! first argument must be a string literal template".to_string(),
+                ),
+            );
+        }
+    }
+
+    fn check_echo(&mut self, e: &ast::Echo) {
+        let body_effects = self.new_effect_var();
+        self.current_effects.push(body_effects.clone());
+        self.check_block(&e.body);
+        let collected = self.current_effects.pop().unwrap();
+
+        if !self.effect_set_is_pure(&collected) {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(
+                    "echo block must be pure and cannot use runtime effects".to_string(),
+                ));
+        }
+
+        let mut const_context: std::collections::HashMap<String, ConstValue> =
+            std::collections::HashMap::new();
+
+        for stmt in &e.body.stmts {
+            match stmt {
+                ast::Stmt::Let { pat, init, .. } => {
+                    let Some(init_expr) = init else {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(
+                                "echo let binding requires an initializer".to_string(),
+                            ),
+                        );
+                        continue;
+                    };
+
+                    let value = eval_expr(init_expr, &const_context);
+                    if value == ConstValue::Unknown {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(
+                                "echo initializer is not compile-time evaluable".to_string(),
+                            ));
+                        continue;
+                    }
+
+                    if let ast::Pattern::Ident(name, _, _) = pat {
+                        const_context.insert(name.clone(), value);
+                    } else {
+                        self.diagnostics
+                            .push(
+                                izel_diagnostics::Diagnostic::error().with_message(
+                                    "echo let bindings currently require identifier patterns"
+                                        .to_string(),
+                                ),
+                            );
+                    }
+                }
+                ast::Stmt::Expr(expr) => {
+                    if eval_expr(expr, &const_context) == ConstValue::Unknown {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(
+                                "echo statement is not compile-time evaluable".to_string(),
+                            ));
+                    }
+                }
+            }
+        }
+
+        if let Some(expr) = &e.body.expr {
+            if eval_expr(expr, &const_context) == ConstValue::Unknown {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(
+                        "echo trailing expression is not compile-time evaluable".to_string(),
+                    ));
+            }
+        }
+    }
+
+    fn effect_set_is_pure(&self, set: &EffectSet) -> bool {
+        match self.prune_effects(set) {
+            EffectSet::Concrete(v) => v.is_empty() || v.iter().all(|e| *e == Effect::Pure),
+            EffectSet::Row(vals, tail) => {
+                vals.iter().all(|e| *e == Effect::Pure) && self.effect_set_is_pure(&tail)
+            }
+            EffectSet::Var(_) | EffectSet::Param(_) => true,
+        }
+    }
+
     fn check_forge(&mut self, f: &ast::Forge) {
-        dbg!(&f.name, &self.current_self);
         self.push_scope();
         let old_flow = self.in_flow_context;
         self.in_flow_context = f.is_flow;
@@ -331,9 +719,6 @@ impl TypeChecker {
                     pty = target.clone();
                 }
             }
-            if param.name == "self" {
-                dbg!(&param.name, &pty);
-            }
             self.define(param.name.clone(), pty.clone());
         }
 
@@ -344,20 +729,19 @@ impl TypeChecker {
 
             let collected = self.current_effects.pop().unwrap();
 
-            // Unify body effects with declared/inferred effects
-            if let Some(sig) = self.resolve_name(&f.name) {
-                if let Type::Function {
-                    effects: declared, ..
-                } = self.prune(&sig)
-                {
-                    if !self.unify_effects(&collected, &declared) {
-                        self.diagnostics
-                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
-                                "Function has effects {:?} but only declared {:?}",
-                                self.prune_effects(&collected),
-                                declared
-                            )));
-                    }
+            // Unify body effects with this forge's declared effects.
+            let declared_sig = self.collect_forge_signature(f);
+            if let Type::Function {
+                effects: declared, ..
+            } = self.prune(&declared_sig.ty)
+            {
+                if !self.unify_effects(&collected, &declared) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "Function has effects {:?} but only declared {:?}",
+                            self.prune_effects(&collected),
+                            declared
+                        )));
                 }
             }
 
@@ -389,18 +773,37 @@ impl TypeChecker {
     fn check_impl(&mut self, i: &ast::Impl) {
         let _target = self.lower_ast_type(&i.target);
         if let Some(weave_ty) = &i.weave {
-            if let ast::Type::Prim(weave_name) = weave_ty {
-                if let Some(w) = self.weaves.get(weave_name).cloned() {
-                    for expected_method in &w.methods {
-                        let found = i.items.iter().find(|item| {
-                            if let ast::Item::Forge(f) = item {
-                                f.name == expected_method.name
-                            } else {
-                                false
-                            }
-                        });
+            let weave_name = self.type_to_string(weave_ty);
+            if let Some(w) = self.weaves.get(&weave_name).cloned() {
+                for expected_method in &w.methods {
+                    let found = i.items.iter().find(|item| {
+                        if let ast::Item::Forge(f) = item {
+                            f.name == expected_method.name
+                        } else {
+                            false
+                        }
+                    });
 
-                        if found.is_none() {}
+                    if let Some(ast::Item::Forge(impl_method)) = found {
+                        let expected_effects = self.effect_set_from_names(&expected_method.effects);
+                        let actual_effects = self.effect_set_from_names(&impl_method.effects);
+
+                        if !self.unify_effects(&actual_effects, &expected_effects) {
+                            self.diagnostics.push(
+                                izel_diagnostics::Diagnostic::error().with_message(format!(
+                                    "impl method '{}::{}' introduces effects not declared by weave '{}'",
+                                    self.type_to_string(&i.target),
+                                    impl_method.name,
+                                    weave_name,
+                                )),
+                            );
+                        }
+                    } else {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "impl for '{}' is missing required weave method '{}'",
+                                weave_name, expected_method.name,
+                            )));
                     }
                 }
             }
@@ -436,10 +839,27 @@ impl TypeChecker {
     fn collect_item_signature(&mut self, item: &ast::Item) {
         match item {
             ast::Item::Weave(w) => {
+                self.validate_non_forge_attribute_macros(&w.attributes, "weave");
+                if self.has_error_attr(&w.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on weave '{}'",
+                        w.name
+                    )));
+                }
                 self.weaves.insert(w.name.clone(), w.clone());
                 self.define(w.name.clone(), Type::Prim(PrimType::Void));
             }
             ast::Item::Impl(i) => {
+                self.validate_non_forge_attribute_macros(&i.attributes, "impl block");
+                if self.has_error_attr(&i.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on impl block"
+                                .to_string(),
+                        ),
+                    );
+                }
                 let target = self.lower_ast_type(&i.target);
                 let old_self = self.current_self.clone();
                 self.current_self = Some(target.clone());
@@ -488,10 +908,7 @@ impl TypeChecker {
                     for item in &i.items {
                         if let ast::Item::Forge(f) = item {
                             let scheme = self.collect_forge_signature(f);
-                            self.method_env
-                                .entry(target_name.clone())
-                                .or_default()
-                                .insert(f.name.clone(), scheme);
+                            self.register_method_overload(&target_name, &f.name, scheme);
                         }
                     }
                 }
@@ -503,11 +920,27 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Ward(w) => {
+                self.validate_non_forge_attribute_macros(&w.attributes, "ward");
+                if self.has_error_attr(&w.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on ward '{}'",
+                        w.name
+                    )));
+                }
                 for it in &w.items {
                     self.collect_item_signature(it);
                 }
             }
             ast::Item::Static(st) => {
+                self.validate_non_forge_attribute_macros(&st.attributes, "static");
+                if self.has_error_attr(&st.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on static '{}'",
+                        st.name
+                    )));
+                }
                 let ty = self.lower_ast_type(&st.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = st.visibility.clone();
@@ -517,7 +950,24 @@ impl TypeChecker {
                 }
             }
             ast::Item::Forge(f) => {
+                if self.has_error_attr(&f.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on forge '{}'",
+                        f.name
+                    )));
+                }
+
+                self.validate_forge_attribute_macros(f);
+
+                let boundary_effects = self.parse_effect_boundary_attr(&f.attributes, &f.name);
+                if !boundary_effects.is_empty() {
+                    self.effect_boundaries
+                        .insert(f.name.clone(), boundary_effects);
+                }
+
                 let scheme = self.collect_forge_signature(f);
+                self.register_overload(f.name.clone(), scheme.clone());
                 self.define_scheme(f.name.clone(), scheme.clone());
                 if let Some(def_id) = self.span_to_def.read().unwrap().get(&f.name_span) {
                     self.def_types.insert(*def_id, scheme.ty.clone());
@@ -539,6 +989,18 @@ impl TypeChecker {
             }
 
             ast::Item::Shape(s) => {
+                self.validate_non_forge_attribute_macros(&s.attributes, "shape");
+                if self.has_error_attr(&s.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on shape '{}'",
+                        s.name
+                    )));
+                }
+                let layout = self.extract_shape_layout(s);
+                self.shape_layouts.insert(s.name.clone(), layout);
+                self.validate_shape_derives(s);
+
                 self.push_scope();
                 let mut bounds = Vec::new();
                 for gp in &s.generic_params {
@@ -566,6 +1028,14 @@ impl TypeChecker {
                 }
             }
             ast::Item::Dual(d) => {
+                self.validate_non_forge_attribute_macros(&d.attributes, "dual");
+                if self.has_error_attr(&d.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on dual '{}'",
+                        d.name
+                    )));
+                }
                 self.push_scope();
                 let mut bounds = Vec::new();
                 for gp in &d.generic_params {
@@ -593,6 +1063,14 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Alias(a) => {
+                self.validate_non_forge_attribute_macros(&a.attributes, "alias");
+                if self.has_error_attr(&a.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on alias '{}'",
+                        a.name
+                    )));
+                }
                 let ty = self.lower_ast_type(&a.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = a.visibility.clone();
@@ -602,6 +1080,12 @@ impl TypeChecker {
                 }
             }
             ast::Item::Scroll(s) => {
+                self.validate_non_forge_attribute_macros(&s.attributes, "scroll");
+                let has_error_attr = self.has_error_attr(&s.attributes);
+                if has_error_attr {
+                    self.custom_error_types.insert(s.name.clone());
+                }
+
                 let mut scheme = self.generalize(&Type::Adt(DefId(0)));
                 scheme.visibility = s.visibility.clone();
                 self.define_scheme(s.name.clone(), scheme.clone());
@@ -610,16 +1094,218 @@ impl TypeChecker {
                 }
             }
             ast::Item::Echo(e) => {
-                // Compile-time execution stub
-                self.check_block(&e.body);
+                self.validate_non_forge_attribute_macros(&e.attributes, "echo block");
+                if self.has_error_attr(&e.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on echo block"
+                                .to_string(),
+                        ),
+                    );
+                }
             }
+            ast::Item::Macro(_) => {}
             ast::Item::Bridge(b) => {
+                self.validate_non_forge_attribute_macros(&b.attributes, "bridge block");
+                if self.has_error_attr(&b.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on bridge block"
+                                .to_string(),
+                        ),
+                    );
+                }
+                self.validate_bridge_declarations(b);
                 // ABI-specific registration stub
                 for it in &b.items {
                     self.collect_item_signature(it);
                 }
             }
         }
+    }
+
+    fn has_error_attr(&self, attrs: &[ast::Attribute]) -> bool {
+        attrs.iter().any(|a| a.name == "error")
+    }
+
+    fn parse_effect_name(&self, name: &str) -> Effect {
+        match name {
+            "io" => Effect::IO,
+            "net" => Effect::Net,
+            "alloc" => Effect::Alloc,
+            "panic" => Effect::Panic,
+            "unsafe" => Effect::Unsafe,
+            "time" => Effect::Time,
+            "rand" => Effect::Rand,
+            "env" => Effect::Env,
+            "ffi" => Effect::Ffi,
+            "thread" => Effect::Thread,
+            "mut" => Effect::Mut,
+            "pure" => Effect::Pure,
+            _ => Effect::User(name.to_string()),
+        }
+    }
+
+    fn parse_effect_boundary_attr(
+        &mut self,
+        attrs: &[ast::Attribute],
+        owner_name: &str,
+    ) -> Vec<Effect> {
+        let mut contained = Vec::new();
+
+        for attr in attrs {
+            if attr.name != "effect_boundary" {
+                continue;
+            }
+
+            if attr.args.is_empty() {
+                self.diagnostics.push(
+                    izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "forge '{}' has invalid #[effect_boundary] usage: expected at least one effect name",
+                        owner_name
+                    )),
+                );
+                continue;
+            }
+
+            for arg in &attr.args {
+                let effect_name = match arg {
+                    ast::Expr::Ident(n, _) => Some(n.clone()),
+                    ast::Expr::Path(parts, _) if !parts.is_empty() => Some(parts.join("::")),
+                    _ => None,
+                };
+
+                let Some(effect_name) = effect_name else {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "forge '{}' has invalid #[effect_boundary] argument: expected effect identifier",
+                            owner_name
+                        )),
+                    );
+                    continue;
+                };
+
+                let effect = self.parse_effect_name(&effect_name);
+                if !contained.contains(&effect) {
+                    contained.push(effect);
+                }
+            }
+        }
+
+        contained
+    }
+
+    fn apply_effect_boundary(&self, effects: &EffectSet, boundaries: &[Effect]) -> EffectSet {
+        let effects = self.prune_effects(effects);
+        match effects {
+            EffectSet::Concrete(v) => {
+                let mut filtered: Vec<Effect> =
+                    v.into_iter().filter(|e| !boundaries.contains(e)).collect();
+
+                if filtered.is_empty() {
+                    filtered.push(Effect::Pure);
+                }
+                EffectSet::Concrete(filtered)
+            }
+            EffectSet::Row(vals, tail) => {
+                let vals: Vec<Effect> = vals
+                    .into_iter()
+                    .filter(|e| !boundaries.contains(e))
+                    .collect();
+                let tail = self.apply_effect_boundary(&tail, boundaries);
+                EffectSet::Row(vals, Box::new(tail))
+            }
+            EffectSet::Var(_) | EffectSet::Param(_) => effects,
+        }
+    }
+
+    fn apply_boundaries_for_callee(&self, callee: &ast::Expr, effects: &EffectSet) -> EffectSet {
+        let mut masked = effects.clone();
+
+        if let ast::Expr::Ident(name, _) = callee {
+            if let Some(boundaries) = self.effect_boundaries.get(name) {
+                masked = self.apply_effect_boundary(&masked, boundaries);
+            }
+        }
+
+        masked
+    }
+
+    fn extract_shape_layout(&mut self, s: &ast::Shape) -> ShapeLayout {
+        let mut packed = false;
+        let mut align = None;
+
+        for attr in &s.attributes {
+            match attr.name.as_str() {
+                "packed" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid #[packed] usage: expected no arguments",
+                                s.name
+                            )));
+                        continue;
+                    }
+                    if packed {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' declares #[packed] more than once",
+                                s.name
+                            )));
+                    }
+                    packed = true;
+                }
+                "align" => {
+                    if attr.args.len() != 1 {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid #[align(..)] usage: expected exactly one integer argument",
+                                s.name
+                            )),
+                        );
+                        continue;
+                    }
+
+                    let parsed = match &attr.args[0] {
+                        ast::Expr::Literal(ast::Literal::Int(v)) => u32::try_from(*v).ok(),
+                        _ => None,
+                    };
+
+                    let Some(value) = parsed else {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "shape '{}' has invalid #[align(..)] value: expected integer literal",
+                            s.name
+                        )));
+                        continue;
+                    };
+
+                    if value == 0 || !value.is_power_of_two() {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid alignment {}: alignment must be a non-zero power of two",
+                                s.name, value
+                            )),
+                        );
+                        continue;
+                    }
+
+                    if align.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' declares #[align(..)] more than once",
+                                s.name
+                            )));
+                        continue;
+                    }
+
+                    align = Some(value);
+                }
+                _ => {}
+            }
+        }
+
+        ShapeLayout { packed, align }
     }
 
     fn collect_forge_signature(&mut self, f: &ast::Forge) -> Scheme {
@@ -653,30 +1339,7 @@ impl TypeChecker {
 
         self.apply_lifetime_elision(&mut params, &mut ret);
 
-        let mut effects = Vec::new();
-        for e in &f.effects {
-            effects.push(match e.as_str() {
-                "io" => Effect::IO,
-                "net" => Effect::Net,
-                "alloc" => Effect::Alloc,
-                "panic" => Effect::Panic,
-                "unsafe" => Effect::Unsafe,
-                "time" => Effect::Time,
-                "rand" => Effect::Rand,
-                "env" => Effect::Env,
-                "ffi" => Effect::Ffi,
-                "thread" => Effect::Thread,
-                "mut" => Effect::Mut,
-                "pure" => Effect::Pure,
-                _ => Effect::User(e.clone()),
-            });
-        }
-
-        let effect_set = if f.effects.contains(&"pure".to_string()) || f.effects.is_empty() {
-            EffectSet::Concrete(vec![Effect::Pure])
-        } else {
-            EffectSet::Concrete(effects)
-        };
+        let effect_set = self.effect_set_from_names(&f.effects);
 
         let ty = Type::Function {
             params,
@@ -703,6 +1366,33 @@ impl TypeChecker {
         scheme.visibility = f.visibility.clone();
 
         scheme
+    }
+
+    fn effect_set_from_names(&self, names: &[String]) -> EffectSet {
+        if names.is_empty() || names.iter().any(|e| e == "pure") {
+            return EffectSet::Concrete(vec![Effect::Pure]);
+        }
+
+        let effects = names
+            .iter()
+            .map(|e| match e.as_str() {
+                "io" => Effect::IO,
+                "net" => Effect::Net,
+                "alloc" => Effect::Alloc,
+                "panic" => Effect::Panic,
+                "unsafe" => Effect::Unsafe,
+                "time" => Effect::Time,
+                "rand" => Effect::Rand,
+                "env" => Effect::Env,
+                "ffi" => Effect::Ffi,
+                "thread" => Effect::Thread,
+                "mut" => Effect::Mut,
+                "pure" => Effect::Pure,
+                _ => Effect::User(e.clone()),
+            })
+            .collect();
+
+        EffectSet::Concrete(effects)
     }
 
     fn check_block(&mut self, block: &ast::Block) {
@@ -833,7 +1523,6 @@ impl TypeChecker {
     fn lower_ast_type(&mut self, ty: &ast::Type) -> Type {
         let res = match ty {
             ast::Type::Prim(s) => {
-                dbg!(s);
                 match s.as_str() {
                     "int" | "i32" => Type::Prim(PrimType::I32),
                     "never" => Type::Prim(PrimType::Never),
@@ -932,7 +1621,6 @@ impl TypeChecker {
             }
             ast::Type::Error => Type::Error,
         };
-        dbg!(&res);
         res
     }
 
@@ -1228,8 +1916,26 @@ impl TypeChecker {
     }
 
     fn is_proof_mode(&self) -> bool {
-        let res = self.in_raw_block || self.current_attributes.iter().any(|a| a.name == "proof");
-        res
+        self.in_raw_block || self.current_attributes.iter().any(|a| a.name == "proof")
+    }
+
+    fn resolve_zone_allocator_accessor(&mut self, segments: &[String]) -> Option<Type> {
+        if segments.len() != 2 || segments[1] != "allocator" {
+            return None;
+        }
+
+        if segments[0] == "zone" {
+            if self.zone_scope_depth > 0 {
+                return Some(Type::Prim(PrimType::ZoneAllocator));
+            }
+            return None;
+        }
+
+        if let Some(Type::Prim(PrimType::ZoneAllocator)) = self.resolve_name(&segments[0]) {
+            return Some(Type::Prim(PrimType::ZoneAllocator));
+        }
+
+        None
     }
 
     fn prune(&self, ty: &Type) -> Type {
@@ -1270,9 +1976,6 @@ impl TypeChecker {
             },
             ast::Expr::Ident(name, _) => {
                 let res = self.resolve_name(name);
-                if name == "self" {
-                    dbg!(name, &res);
-                }
                 if let Some(ty) = res {
                     ty
                 } else {
@@ -1367,46 +2070,74 @@ impl TypeChecker {
                 }
 
                 // Method resolution
-                let type_name = match &pruned {
-                    Type::Prim(p) => match p {
-                        PrimType::I8 => "i8".to_string(),
-                        PrimType::I16 => "i16".to_string(),
-                        PrimType::I32 => "i32".to_string(),
-                        PrimType::I64 => "i64".to_string(),
-                        PrimType::I128 => "i128".to_string(),
-                        PrimType::U8 => "u8".to_string(),
-                        PrimType::U16 => "u16".to_string(),
-                        PrimType::U32 => "u32".to_string(),
-                        PrimType::U64 => "u64".to_string(),
-                        PrimType::U128 => "u128".to_string(),
-                        PrimType::F32 => "f32".to_string(),
-                        PrimType::F64 => "f64".to_string(),
-                        PrimType::Bool => "bool".to_string(),
-                        PrimType::Str => "str".to_string(),
-                        _ => "".to_string(),
-                    },
-                    Type::Adt(_) => {
-                        // For now, we don't have a direct DefId -> Name map in TypeChecker
-                        // But we might be able to find it if we look at what was defined in env.
-                        // For simplicity, let's assume we can resolve it if we had the name.
-                        "".to_string()
-                    }
-                    _ => "".to_string(),
-                };
-
-                if !type_name.is_empty() {
-                    let scheme = self
+                if let Some(type_name) = self.method_target_name(&pruned) {
+                    let schemes = self
                         .method_env
                         .get(&type_name)
                         .and_then(|m| m.get(field).cloned());
-                    if let Some(s) = scheme {
-                        return self.instantiate(&s);
+                    if let Some(schemes) = schemes {
+                        if let Some(s) = schemes.first() {
+                            return self.instantiate(s);
+                        }
                     }
                 }
 
                 self.new_var()
             }
             ast::Expr::Call(callee, args) => {
+                if let ast::Expr::Ident(name, _) = callee.as_ref() {
+                    if name == "asm" {
+                        self.validate_inline_asm_call(args);
+                        return Type::Prim(PrimType::Void);
+                    }
+                }
+
+                if let ast::Expr::Member(obj, method, _) = callee.as_ref() {
+                    if method == "allocator" && args.is_empty() {
+                        if let ast::Expr::Ident(name, _) = obj.as_ref() {
+                            if name == "zone" {
+                                if self.zone_scope_depth > 0 {
+                                    return Type::Prim(PrimType::ZoneAllocator);
+                                }
+                                self.diagnostics.push(
+                                    izel_diagnostics::Diagnostic::error().with_message(
+                                        "zone::allocator() is only available inside a zone block"
+                                            .to_string(),
+                                    ),
+                                );
+                                return Type::Error;
+                            }
+
+                            if let Some(Type::Prim(PrimType::ZoneAllocator)) =
+                                self.resolve_name(name)
+                            {
+                                return Type::Prim(PrimType::ZoneAllocator);
+                            }
+                        }
+                    }
+                }
+
+                if let ast::Expr::Path(segments, _) = callee.as_ref() {
+                    if args.is_empty() {
+                        if let Some(ty) = self.resolve_zone_allocator_accessor(segments) {
+                            return ty;
+                        }
+
+                        if segments.len() == 2
+                            && segments[0] == "zone"
+                            && segments[1] == "allocator"
+                        {
+                            self.diagnostics.push(
+                                izel_diagnostics::Diagnostic::error().with_message(
+                                    "zone::allocator() is only available inside a zone block"
+                                        .to_string(),
+                                ),
+                            );
+                            return Type::Error;
+                        }
+                    }
+                }
+
                 let mut effective_args = args.clone();
                 if let ast::Expr::Member(obj, _, span) = callee.as_ref() {
                     effective_args.insert(
@@ -1418,85 +2149,66 @@ impl TypeChecker {
                         },
                     );
                 }
-                let ct = self.infer_expr(callee);
 
-                // Static verification of @requires at call-sites
+                let effective_arg_tys: Vec<Type> = effective_args
+                    .iter()
+                    .map(|arg| self.infer_expr(&arg.value))
+                    .collect();
+
                 if let ast::Expr::Ident(name, span) = callee.as_ref() {
-                    if let Some(scheme) = self.resolve_scheme(name) {
-                        if !scheme.requires.is_empty() {
-                            let mut eval_args = Vec::new();
-                            for arg in args {
-                                eval_args.push(::izel_parser::eval::eval_expr(
-                                    &arg.value,
-                                    &std::collections::HashMap::new(),
-                                ));
-                            }
-                            // Only check if all args are known constants
-                            if eval_args
-                                .iter()
-                                .all(|a| *a != ::izel_parser::eval::ConstValue::Unknown)
-                            {
-                                let diags = contracts::ContractChecker::check_requires_from_scheme(
-                                    name,
-                                    &scheme.param_names,
-                                    &scheme.requires,
-                                    &eval_args,
-                                    *span,
+                    if let Some((scheme, ty)) =
+                        self.select_function_overload(name, &effective_arg_tys, *span)
+                    {
+                        return self.apply_selected_call(
+                            callee,
+                            args,
+                            &effective_args,
+                            &scheme,
+                            &ty,
+                        );
+                    }
+                }
+
+                if let ast::Expr::Member(_, method, span) = callee.as_ref() {
+                    if let Some(receiver_ty) = effective_arg_tys.first() {
+                        if let Some(type_name) = self.method_target_name(receiver_ty) {
+                            if let Some((scheme, ty)) = self.select_method_overload(
+                                &type_name,
+                                method,
+                                &effective_arg_tys,
+                                *span,
+                            ) {
+                                return self.apply_selected_call(
+                                    callee,
+                                    args,
+                                    &effective_args,
+                                    &scheme,
+                                    &ty,
                                 );
-                                self.diagnostics.extend(diags);
                             }
                         }
                     }
                 }
 
+                let ct = self.infer_expr(callee);
                 if let Type::Function {
-                    params: mut_params,
+                    params,
                     ret,
                     effects,
                 } = self.prune(&ct)
                 {
                     let current = self.current_effects.last().cloned();
                     if let Some(curr) = current {
-                        self.accumulate_effects(&curr, &effects);
+                        let bounded = self.apply_boundaries_for_callee(callee, &effects);
+                        self.accumulate_effects(&curr, &bounded);
                     }
 
-                    // Build mapping from parameter names to argument expressions
-                    let mut mapping = std::collections::HashMap::new();
-                    if let Some(name) = if let ast::Expr::Ident(n, _) = callee.as_ref() {
-                        Some(n)
-                    } else {
-                        None
-                    } {
-                        if let Some(scheme) = self.resolve_scheme(name) {
-                            for (pname, arg) in scheme.param_names.iter().zip(effective_args.iter())
-                            {
-                                mapping.insert(pname.clone(), arg.value.clone());
-                            }
-                        }
+                    for (at, pty) in effective_arg_tys.iter().zip(params.iter()) {
+                        self.unify(pty, at);
                     }
 
-                    for (arg, pty) in effective_args.iter().zip(mut_params.iter()) {
-                        let at = self.infer_expr(&arg.value);
-                        // Substitute pty based on mapping
-                        let substituted_pty = if !mapping.is_empty() {
-                            self.substitute_type(pty, &mapping)
-                        } else {
-                            pty.clone()
-                        };
-
-                        self.unify(&substituted_pty, &at);
-                    }
-
-                    if !mapping.is_empty() {
-                        self.substitute_type(&ret, &mapping)
-                    } else {
-                        *ret
-                    }
+                    *ret
                 } else {
-                    for arg in args {
-                        self.infer_expr(&arg.value);
-                    }
-
                     self.new_var()
                 }
             }
@@ -1546,10 +2258,17 @@ impl TypeChecker {
                 Type::Prim(PrimType::Void)
             }
             ast::Expr::Raw(inner) => {
+                let old_raw = self.in_raw_block;
+                self.in_raw_block = true;
                 let ty = self.infer_expr(inner);
-                // raw x always produces a Witness<T> in proof context
-                // even in non-proof functions, 'raw' is the explicit bypass.
-                Type::Witness(Box::new(ty))
+                self.in_raw_block = old_raw;
+
+                match inner.as_ref() {
+                    // `raw { ... }` models an explicit unsafe scope and preserves inner type.
+                    ast::Expr::Block(_) => ty,
+                    // Legacy `raw expr` remains an explicit witness bypass constructor.
+                    _ => Type::Witness(Box::new(ty)),
+                }
             }
             ast::Expr::Each { var, iter, body } => {
                 let _it = self.infer_expr(iter);
@@ -1637,6 +2356,7 @@ impl TypeChecker {
             }
             ast::Expr::Zone { name, body } => {
                 self.push_scope();
+                self.zone_scope_depth += 1;
                 // Bind `<name>::allocator()` equivalent.
                 // For now we just bind the name itself to a ZoneAllocator handle
                 self.define(name.clone(), Type::Prim(PrimType::ZoneAllocator));
@@ -1644,6 +2364,7 @@ impl TypeChecker {
                 let res_ty = self.new_var();
                 self.check_block_with_expected(body, Some(&res_ty));
 
+                self.zone_scope_depth -= 1;
                 self.pop_scope();
                 res_ty
             }
@@ -1678,6 +2399,242 @@ impl TypeChecker {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn method_target_name(&self, ty: &Type) -> Option<String> {
+        match self.prune(ty) {
+            Type::Prim(p) => Some(
+                match p {
+                    PrimType::I8 => "i8",
+                    PrimType::I16 => "i16",
+                    PrimType::I32 => "i32",
+                    PrimType::I64 => "i64",
+                    PrimType::I128 => "i128",
+                    PrimType::U8 => "u8",
+                    PrimType::U16 => "u16",
+                    PrimType::U32 => "u32",
+                    PrimType::U64 => "u64",
+                    PrimType::U128 => "u128",
+                    PrimType::F32 => "f32",
+                    PrimType::F64 => "f64",
+                    PrimType::Bool => "bool",
+                    PrimType::Str => "str",
+                    _ => return None,
+                }
+                .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn select_function_overload(
+        &mut self,
+        name: &str,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let mut candidates = self.overload_env.get(name).cloned().unwrap_or_default();
+        if candidates.is_empty() {
+            if let Some(scheme) = self.resolve_scheme(name) {
+                candidates.push(scheme);
+            }
+        }
+
+        self.select_overload_candidates(name, candidates, arg_tys, span)
+    }
+
+    fn select_method_overload(
+        &mut self,
+        target: &str,
+        method: &str,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let candidates = self
+            .method_env
+            .get(target)
+            .and_then(|methods| methods.get(method))
+            .cloned()
+            .unwrap_or_default();
+
+        self.select_overload_candidates(method, candidates, arg_tys, span)
+    }
+
+    fn select_overload_candidates(
+        &mut self,
+        name: &str,
+        candidates: Vec<Scheme>,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let mut ranked: Vec<(usize, Scheme, Type)> = Vec::new();
+
+        for scheme in candidates {
+            let instantiated = self.instantiate(&scheme);
+            if let Type::Function { params, .. } = self.prune(&instantiated) {
+                if params.len() != arg_tys.len() {
+                    continue;
+                }
+
+                if !params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .all(|(p, a)| self.type_compatible_for_overload(p, a))
+                {
+                    continue;
+                }
+
+                let score = params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .map(|(p, a)| self.overload_match_score(p, a))
+                    .sum();
+                ranked.push((score, scheme, instantiated));
+            }
+        }
+
+        if ranked.is_empty() {
+            return None;
+        }
+
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        if ranked.len() > 1 && ranked[0].0 == ranked[1].0 {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "Ambiguous call to '{}': multiple overloads match this argument list at {:?}",
+                    name, span
+                )));
+            return None;
+        }
+
+        let (_, scheme, ty) = ranked.remove(0);
+        Some((scheme, ty))
+    }
+
+    fn type_compatible_for_overload(&self, expected: &Type, actual: &Type) -> bool {
+        let expected = self.prune(expected);
+        let actual = self.prune(actual);
+
+        match (&expected, &actual) {
+            (Type::Var(_), _) | (_, Type::Var(_)) => true,
+            (Type::Error, _) | (_, Type::Error) => true,
+            (Type::Prim(e), Type::Prim(a)) => e == a,
+            (Type::Optional(e), Type::Optional(a))
+            | (Type::Cascade(e), Type::Cascade(a))
+            | (Type::Witness(e), Type::Witness(a)) => self.type_compatible_for_overload(e, a),
+            (Type::Optional(e), t) | (Type::Cascade(e), t) => {
+                self.type_compatible_for_overload(e, t)
+            }
+            (Type::Pointer(e, em, _), Type::Pointer(a, am, _)) => {
+                em == am && self.type_compatible_for_overload(e, a)
+            }
+            (Type::BuiltinWitness(k1, i1), Type::BuiltinWitness(k2, i2)) => {
+                k1 == k2 && self.type_compatible_for_overload(i1, i2)
+            }
+            (Type::Function { params: p1, .. }, Type::Function { params: p2, .. }) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(l, r)| self.type_compatible_for_overload(l, r))
+            }
+            (Type::Param(_), _) => true,
+            _ => expected == actual,
+        }
+    }
+
+    fn overload_match_score(&self, expected: &Type, actual: &Type) -> usize {
+        let expected = self.prune(expected);
+        let actual = self.prune(actual);
+        if expected == actual {
+            return 4;
+        }
+
+        match (&expected, &actual) {
+            (Type::Var(_), _) | (_, Type::Var(_)) | (Type::Param(_), _) => 1,
+            (Type::Optional(e), Type::Optional(a))
+            | (Type::Cascade(e), Type::Cascade(a))
+            | (Type::Witness(e), Type::Witness(a)) => self.overload_match_score(e, a),
+            (Type::Pointer(e, em, _), Type::Pointer(a, am, _)) if em == am => {
+                self.overload_match_score(e, a)
+            }
+            _ => 0,
+        }
+    }
+
+    fn apply_selected_call(
+        &mut self,
+        callee: &ast::Expr,
+        args: &[ast::Arg],
+        effective_args: &[ast::Arg],
+        selected_scheme: &Scheme,
+        selected_ty: &Type,
+    ) -> Type {
+        if let ast::Expr::Ident(name, span) = callee {
+            if !selected_scheme.requires.is_empty() {
+                let mut eval_args = Vec::new();
+                for arg in args {
+                    eval_args.push(::izel_parser::eval::eval_expr(
+                        &arg.value,
+                        &std::collections::HashMap::new(),
+                    ));
+                }
+
+                if eval_args
+                    .iter()
+                    .all(|a| *a != ::izel_parser::eval::ConstValue::Unknown)
+                {
+                    let diags = contracts::ContractChecker::check_requires_from_scheme(
+                        name,
+                        &selected_scheme.param_names,
+                        &selected_scheme.requires,
+                        &eval_args,
+                        *span,
+                    );
+                    self.diagnostics.extend(diags);
+                }
+            }
+        }
+
+        if let Type::Function {
+            params,
+            ret,
+            effects,
+        } = self.prune(selected_ty)
+        {
+            let current = self.current_effects.last().cloned();
+            if let Some(curr) = current {
+                let bounded = self.apply_boundaries_for_callee(callee, &effects);
+                self.accumulate_effects(&curr, &bounded);
+            }
+
+            let mut mapping = std::collections::HashMap::new();
+            for (pname, arg) in selected_scheme
+                .param_names
+                .iter()
+                .zip(effective_args.iter())
+            {
+                mapping.insert(pname.clone(), arg.value.clone());
+            }
+
+            for (arg, pty) in effective_args.iter().zip(params.iter()) {
+                let at = self.infer_expr(&arg.value);
+                let substituted_pty = if mapping.is_empty() {
+                    pty.clone()
+                } else {
+                    self.substitute_type(pty, &mapping)
+                };
+                self.unify(&substituted_pty, &at);
+            }
+
+            if mapping.is_empty() {
+                *ret
+            } else {
+                self.substitute_type(&ret, &mapping)
+            }
+        } else {
+            self.new_var()
         }
     }
 
@@ -2222,6 +3179,221 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_block_preserves_inner_type() {
+        let source = "forge raw_i32() -> i32 { raw { 7 } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "raw block should preserve inner type, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_raw_block_allows_witness_new_outside_proof() {
+        let source = "forge mk() -> Witness<i32> { raw { Witness::<i32>::new() } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "witness construction should be permitted inside raw block, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_raw_expr_still_constructs_witness() {
+        let source = "forge mk() -> Witness<i32> { raw 1 }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "legacy raw expr witness bypass should remain valid, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_bridge_c_declarations_are_accepted() {
+        let source = "bridge \"C\" { forge malloc(size: usize) -> *u8 static errno: i32 }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid C bridge declarations should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_bridge_requires_supported_abi() {
+        let source = "bridge \"Rust\" { forge f() }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("bridge ABI")),
+            "unsupported bridge ABI should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_bridge_forge_rejects_body() {
+        let source = "bridge \"C\" { forge f() { give } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("must be a declaration without a body")),
+            "bridge forge body should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_bridge_static_rejects_initializer() {
+        let source = "bridge \"C\" { static errno: i32 = 1 }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("cannot define an initializer")),
+            "bridge static initializer should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_inline_asm_allowed_in_raw_block() {
+        let source = "forge ok() -> void { raw { asm!(\"nop\") } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "asm! should be accepted in raw blocks, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_inline_asm_rejected_outside_raw_block() {
+        let source = "forge bad() -> void { asm!(\"nop\") }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("asm! is only allowed inside raw blocks")),
+            "asm! outside raw block should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_inline_asm_requires_string_template() {
+        let source = "forge bad() -> void { raw { asm!(1) } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("asm! first argument must be a string literal template")),
+            "asm! template must be a string literal"
+        );
+    }
+
+    #[test]
     fn test_witness_construction_rules() {
         let mut checker = TypeChecker::new();
 
@@ -2249,6 +3421,61 @@ mod tests {
         checker.in_raw_block = true;
         assert!(
             checker.current_attributes.iter().any(|a| a.name == "proof") || checker.in_raw_block
+        );
+    }
+
+    #[test]
+    fn test_custom_witness_shape_predicate_typechecks() {
+        let source = r#"
+            shape IsPositive {
+            }
+
+            @proof forge prove_positive(n: i32) -> Witness<IsPositive> {
+                Witness::<IsPositive>::new()
+            }
+
+            forge sqrt_positive(n: i32, _proof: Witness<IsPositive>) -> f64 {
+                give 0.0
+            }
+
+            forge main() {
+                let proof = prove_positive(5)
+                let _v = sqrt_positive(5, proof)
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "custom witness flow should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_custom_witness_new_outside_proof_is_rejected() {
+        let mut tc = TypeChecker::new();
+        tc.current_attributes = vec![];
+        tc.in_raw_block = false;
+
+        let _ = tc.infer_expr(&ast::Expr::WitnessNew(Box::new(ast::GenericArg::Type(
+            ast::Type::Prim("IsPositive".to_string()),
+        ))));
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("only allowed in raw blocks or proof-verified contexts")),
+            "custom witness construction outside proof/raw must produce a diagnostic"
         );
     }
 
@@ -2575,6 +3802,379 @@ mod tests {
     }
 
     #[test]
+    fn test_echo_const_eval_accepts_compile_time_expressions() {
+        let source = r#"
+            echo {
+                let a = 40 + 2
+                let b = a * 2
+                b
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "compile-time evaluable echo should pass, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_echo_rejects_effectful_calls() {
+        let mut tc = TypeChecker::new();
+        tc.define(
+            "log".to_string(),
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Prim(PrimType::Void)),
+                effects: EffectSet::Concrete(vec![Effect::IO]),
+            },
+        );
+
+        let echo = ast::Echo {
+            body: ast::Block {
+                stmts: vec![ast::Stmt::Expr(ast::Expr::Call(
+                    Box::new(ast::Expr::Ident(
+                        "log".to_string(),
+                        izel_span::Span::dummy(),
+                    )),
+                    vec![],
+                ))],
+                expr: None,
+                span: izel_span::Span::dummy(),
+            },
+            attributes: vec![],
+            span: izel_span::Span::dummy(),
+        };
+
+        let module = ast::Module {
+            items: vec![ast::Item::Echo(echo)],
+        };
+
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("echo block must be pure")),
+            "effectful echo should emit purity diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_echo_rejects_non_const_initializers() {
+        let source = r#"
+            forge get() -> i32 { 1 }
+
+            echo {
+                let x = get()
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("not compile-time evaluable")),
+            "non-const echo initializer should emit compile-time evaluability diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_declarative_macro_expansion_typechecks() {
+        let source = r#"
+            macro add_one(x) { x + 1 }
+
+            forge main() {
+                let y: i32 = add_one!(41)
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "declarative macro expansion should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_builtin_derives_are_accepted_on_shape() {
+        let source = "#[derive(Debug, Clone, Eq, Default)] shape User { id: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "supported derives should not emit diagnostics: {:?}",
+            tc.diagnostics
+        );
+
+        let recorded = tc
+            .derived_weaves
+            .get("User")
+            .expect("derived weaves should be recorded for shape");
+        assert!(recorded.contains("Debug"));
+        assert!(recorded.contains("Clone"));
+        assert!(recorded.contains("Eq"));
+        assert!(recorded.contains("Default"));
+    }
+
+    #[test]
+    fn test_unknown_builtin_derive_is_rejected() {
+        let source = "#[derive(Magic)] shape User { id: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unsupported built-in derive 'Magic'")),
+            "unknown derive should emit diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_shape_layout_extraction_for_packed_and_aligned() {
+        let source =
+            "#[packed] #[align(64)] shape RawHeader { magic: u32, version: u16, flags: u8, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        let layout = tc
+            .shape_layouts
+            .get("RawHeader")
+            .expect("shape layout metadata should exist");
+        assert!(layout.packed, "shape should be marked as packed");
+        assert_eq!(layout.align, Some(64), "shape alignment should be 64");
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid packed/align attributes should not emit diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_shape_layout_rejects_invalid_alignment() {
+        let source = "#[align(3)] shape BadAlign { value: u32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("alignment must be a non-zero power of two")),
+            "invalid alignment must produce a diagnostic"
+        );
+
+        let layout = tc
+            .shape_layouts
+            .get("BadAlign")
+            .expect("shape layout metadata should exist");
+        assert_eq!(
+            layout.align, None,
+            "invalid alignment should not be recorded"
+        );
+    }
+
+    #[test]
+    fn test_custom_error_scroll_registration() {
+        let source = "#[error] scroll AppError { NotFound }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.custom_error_types.contains("AppError"),
+            "#[error] scroll should be tracked as a custom error type"
+        );
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid custom error type declaration should not emit diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_error_attr_rejected_on_non_scroll() {
+        let source = "#[error] shape InvalidErrorAttr { code: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("#[error] can only be applied to scroll declarations")),
+            "#[error] on non-scroll declarations must produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_select_function_overload_prefers_exact_match() {
+        let mut tc = TypeChecker::new();
+
+        let i32_scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::I32)],
+                ret: Box::new(Type::Prim(PrimType::I32)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        let str_scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::Str)],
+                ret: Box::new(Type::Prim(PrimType::Str)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        tc.register_overload("id".to_string(), i32_scheme);
+        tc.register_overload("id".to_string(), str_scheme);
+
+        let selected = tc
+            .select_function_overload("id", &[Type::Prim(PrimType::I32)], izel_span::Span::dummy())
+            .expect("expected an overload to be selected");
+
+        if let Type::Function { ret, .. } = selected.1 {
+            assert_eq!(*ret, Type::Prim(PrimType::I32));
+        } else {
+            panic!("selected overload must be a function");
+        }
+    }
+
+    #[test]
+    fn test_select_function_overload_reports_ambiguity() {
+        let mut tc = TypeChecker::new();
+
+        let scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::I32)],
+                ret: Box::new(Type::Prim(PrimType::I32)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        tc.register_overload("dup".to_string(), scheme.clone());
+        tc.register_overload("dup".to_string(), scheme);
+
+        let selected = tc.select_function_overload(
+            "dup",
+            &[Type::Prim(PrimType::I32)],
+            izel_span::Span::dummy(),
+        );
+        assert!(
+            selected.is_none(),
+            "ambiguous overload should not be selected"
+        );
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("Ambiguous call to 'dup'")),
+            "ambiguity must produce a diagnostic"
+        );
+    }
+
+    #[test]
     fn test_zone_allocator_type() {
         let mut checker = TypeChecker::new();
         // Simulate checking `zone temp { temp }`
@@ -2597,6 +4197,53 @@ mod tests {
 
         // After exiting the zone, 'temp' should not be resolvable
         assert_eq!(checker.resolve_name("temp"), None);
+    }
+
+    #[test]
+    fn test_zone_allocator_accessor_available_in_zone_scope() {
+        let source = r#"
+            forge main() {
+                zone batch {
+                    let alloc = zone::allocator()
+                    let alloc2 = batch::allocator()
+                }
+            }
+        "#;
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "zone allocator accessor forms should typecheck inside zone scope, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_zone_allocator_accessor_rejected_outside_zone_scope() {
+        let mut tc = TypeChecker::new();
+        let expr = ast::Expr::Call(
+            Box::new(ast::Expr::Path(
+                vec!["zone".to_string(), "allocator".to_string()],
+                vec![],
+            )),
+            vec![],
+        );
+        let _ = tc.infer_expr(&expr);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("zone::allocator() is only available inside a zone block")),
+            "zone::allocator() outside zone scope must produce a diagnostic"
+        );
     }
 
     #[test]
@@ -2706,6 +4353,220 @@ mod tests {
             "Pure function should NOT allow IO effect"
         );
     }
+
+    #[test]
+    fn test_effect_boundary_masks_contained_effects() {
+        let mut tc = TypeChecker::new();
+        use izel_span::Span;
+
+        tc.define(
+            "io_capture".to_string(),
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Prim(PrimType::Void)),
+                effects: EffectSet::Concrete(vec![Effect::IO]),
+            },
+        );
+        tc.effect_boundaries
+            .insert("io_capture".to_string(), vec![Effect::IO]);
+
+        let outer = tc.new_effect_var();
+        tc.current_effects.push(outer.clone());
+        tc.infer_expr(&ast::Expr::Call(
+            Box::new(ast::Expr::Ident("io_capture".to_string(), Span::dummy())),
+            vec![],
+        ));
+        let collected = tc.current_effects.pop().unwrap();
+
+        assert!(
+            !tc.has_effect(&collected, &Effect::IO),
+            "effect boundary should prevent IO from escaping to caller"
+        );
+    }
+
+    #[test]
+    fn test_effect_boundary_attr_registration() {
+        let source = "#[effect_boundary(io)] forge cap() !io { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        let contained = tc
+            .effect_boundaries
+            .get("cap")
+            .expect("effect boundary should be registered");
+        assert!(
+            contained.contains(&Effect::IO),
+            "registered effect boundary should contain IO"
+        );
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid effect_boundary attribute should not emit diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_effect_boundary_attr_requires_args() {
+        let source = "#[effect_boundary] forge cap() !io { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("expected at least one effect name")),
+            "missing effect_boundary arguments must produce diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_test_registration() {
+        let source = "#[test] forge test_add() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            tc.diagnostics
+        );
+        assert!(tc.test_forges.contains("test_add"));
+    }
+
+    #[test]
+    fn test_attribute_macro_test_rejects_args() {
+        let source = "#[test(1)] forge test_add() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("invalid #[test] usage")),
+            "#[test] with args should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_rejected_on_shape() {
+        let source = "#[inline(always)] shape S { x: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("can only be applied to forge declarations")),
+            "attribute macro on non-forge should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_test_and_bench_conflict() {
+        let source = "#[test] #[bench] forge t() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("cannot use #[test] and #[bench] together")),
+            "#[test] and #[bench] conflict should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_effect_based_testing_allows_pure_test_double_impl() {
+        let source = r#"
+            weave Logger {
+                forge log(self, msg: str) !io
+            }
+
+            shape NoOpLogger {}
+
+            impl Logger for NoOpLogger {
+                forge log(self, msg: str) {
+                    give
+                }
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "pure test double impl should satisfy !io weave contract, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_effect_based_testing_rejects_impl_with_extra_effects() {
+        let mut tc = TypeChecker::new();
+        let weave_contract = tc.effect_set_from_names(&["pure".to_string()]);
+        let impl_effects = tc.effect_set_from_names(&["io".to_string()]);
+
+        assert!(
+            !tc.unify_effects(&impl_effects, &weave_contract),
+            "effectful implementations must not satisfy a pure weave contract"
+        );
+    }
+
     #[test]
     fn test_witness_system() {
         let mut tc = TypeChecker::new();

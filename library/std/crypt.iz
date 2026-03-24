@@ -1,0 +1,19 @@
+// library/std/crypt.iz
+
+// Cryptographic digest algorithms: BLAKE3 and SHA-2 families.
+scroll DigestAlgorithm {
+    BLAKE3,
+    SHA2_256,
+    SHA2_512,
+}
+
+shape Digest {
+    bytes: Vec<u8>,
+}
+
+open forge blake3(data: &[u8]) -> Digest
+open forge sha2_256(data: &[u8]) -> Digest
+open forge sha2_512(data: &[u8]) -> Digest
+
+// Constant-time comparison for secret material.
+open forge constant_time_eq(a: &[u8], b: &[u8]) -> bool

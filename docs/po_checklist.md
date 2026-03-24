@@ -40,13 +40,13 @@
 - [x] 7.4 Variadic Functions
 - [x] 7.5 `pure` Functions
 - [x] 7.6 Method Syntax (on shapes)
-- [ ] 7.7 Function Overloading
+- [x] 7.7 Function Overloading
 
 ## 8. Structures — `shape`
 - [x] 8.1 Basic Shape
 - [x] 8.2 Instantiation & Mutation
 - [x] 8.3 Tuple Shapes & Unit Shapes
-- [ ] 8.4 Packed & Aligned Shapes
+- [x] 8.4 Packed & Aligned Shapes
 - [x] 8.5 Visibility
 
 ## 9. Enumerations — `scroll`
@@ -74,14 +74,14 @@
 
 ## 14. Iterators & Pipelines
 - [x] 14.1 The `|>` Operator
-- [ ] 14.2 Full Combinator List (std::iter)
-- [ ] 14.3 Custom Iterators
+- [x] 14.2 Full Combinator List (std::iter)
+- [x] 14.3 Custom Iterators
 
 ## 15. Error Handling — Cascade Errors
 - [x] 15.1 Result<T, E> and Error Propagation
 - [x] 15.2 The `!` Cascade Propagator
 - [x] 15.3 `seek` / `catch` — Inline Handling
-- [ ] 15.4 Custom Error Types
+- [x] 15.4 Custom Error Types
 
 ## 16. Generics & Parametric Polymorphism
 - [x] Generic Types and Implementation
@@ -90,25 +90,25 @@
 - [x] 17.1 Built-in Effects
 - [x] 17.2 Declaring Effects
 - [x] 17.3 Effect Propagation
-- [ ] 17.4 Effect Boundaries
-- [ ] 17.5 Effect-Based Testing
+- [x] 17.4 Effect Boundaries
+- [x] 17.5 Effect-Based Testing
 
 ## 18. Witness Types
-- [ ] 18.1 Built-in Witnesses
-- [ ] 18.2 Using Witnesses to Eliminate Runtime Checks
-- [ ] 18.3 Custom Witnesses
+- [x] 18.1 Built-in Witnesses
+- [x] 18.2 Using Witnesses to Eliminate Runtime Checks
+- [x] 18.3 Custom Witnesses
 
 ## 19. Temporal Constraints
-- [ ] Verification and Enforcement of Constraints
+- [x] Verification and Enforcement of Constraints
 
 ## 20. Memory Zones
-- [ ] Zones syntax and lifetimes
+- [x] Zones syntax and lifetimes
 
 ## 21. Duality Types
-- [ ] Dual shapes parsing and elaboration
+- [x] Dual shapes parsing and elaboration
 
 ## 22. Compile-Time Evaluation — `echo`
-- [ ] Implementation of `echo` nodes
+- [x] Implementation of `echo` nodes
 
 ## 23. Modules & Visibility — `ward`
 - [x] 23.1 Defining & Nesting Wards
@@ -116,19 +116,19 @@
 - [x] 23.3 File-Based Wards
 
 ## 24. Macros & Meta-Programming
-- [ ] 24.1 Declarative Macros
-- [ ] 24.2 `#[derive(...)]` — Built-in Derivable Weaves
-- [ ] 24.3 Attribute Macros
+- [x] 24.1 Declarative Macros
+- [x] 24.2 `#[derive(...)]` — Built-in Derivable Weaves
+- [x] 24.3 Attribute Macros
 
 ## 25. Concurrency & Async — `flow` / `tide`
-- [ ] 25.1 Threads & Channels
+- [x] 25.1 Threads & Channels
 - [x] 25.2 `flow` / `tide` — Async Functions & Await
-- [ ] 25.3 Atomic Types
+- [x] 25.3 Atomic Types
 
 ## 26. Raw Blocks & FFI — `raw` / `bridge`
-- [ ] 26.1 `raw` Blocks
-- [ ] 26.2 `bridge` — C/C++ FFI
-- [ ] 26.3 Inline Assembly
+- [x] 26.1 `raw` Blocks
+- [x] 26.2 `bridge` — C/C++ FFI
+- [x] 26.3 Inline Assembly
 
 ## 27. Architecture Overview
 - [x] Aligned
@@ -159,12 +159,12 @@
 - [x] 30.5 Memory Regions Summary
 
 ## 31. Standard Library
-- [ ] Core (no `!alloc` needed)
+- [x] Core (no `!alloc` needed)
 - [x] Allocation & Collections
-- [ ] I/O & OS
-- [ ] Concurrency
-- [ ] Math, Hash, Codec
-- [ ] Testing
+- [x] I/O & OS
+- [x] Concurrency
+- [x] Math, Hash, Codec
+- [x] Testing
 
 ## 32. Toolchain
 - [x] `izelc` — Compiler Binary
@@ -178,10 +178,10 @@
 - [x] Scaffolding Complete
 
 ## 34. Milestones & Roadmap
-- [ ] Phase 0 — Bootstrap (Months 1–2)
-- [ ] Phase 1 — Core Language (Months 3–5)
-- [ ] Phase 2 — Type System & Safety (Months 6–8)
-- [ ] Phase 3 — Unique Features (Months 9–12)
+- [x] Phase 0 — Bootstrap (Months 1–2)
+- [x] Phase 1 — Core Language (Months 3–5)
+- [x] Phase 2 — Type System & Safety (Months 6–8)
+- [x] Phase 3 — Unique Features (Months 9–12)
 - [x] Phase 4 — Standard Library v0.1 (Months 13–15)
 - [x] Phase 5 — Toolchain (Months 16–18)
 - [ ] Phase 6 — Optimization & Hardening (Months 19–22)

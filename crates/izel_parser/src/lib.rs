@@ -101,6 +101,10 @@ impl Parser {
                 children.push(SyntaxElement::Token(self.bump())); // ward
                 self.parse_ward_after_keyword(children)
             }
+            TokenKind::Macro => {
+                children.push(SyntaxElement::Token(self.bump())); // macro
+                self.parse_macro_after_keyword(children)
+            }
             TokenKind::Dual => {
                 children.push(SyntaxElement::Token(self.bump())); // dual
                 self.parse_dual_after_keyword(children)
@@ -150,6 +154,70 @@ impl Parser {
         }
         SyntaxNode::new(NodeKind::TypeAlias, children)
     }
+
+    fn parse_macro_after_keyword(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
+        children.extend(self.eat_trivia());
+        if self.is_naming_ident() {
+            children.push(SyntaxElement::Token(self.bump())); // macro name
+        }
+
+        children.extend(self.eat_trivia());
+        if self.current_kind() == TokenKind::Bang {
+            children.push(SyntaxElement::Token(self.bump())); // !
+        }
+
+        children.extend(self.eat_trivia());
+        if matches!(
+            self.current_kind(),
+            TokenKind::OpenParen | TokenKind::OpenBracket
+        ) {
+            let open = self.current_kind();
+            let close = if open == TokenKind::OpenParen {
+                TokenKind::CloseParen
+            } else {
+                TokenKind::CloseBracket
+            };
+
+            children.push(SyntaxElement::Token(self.bump())); // ( or [
+            children.extend(self.eat_trivia());
+
+            while self.current_kind() != close && self.current_kind() != TokenKind::Eof {
+                let start = self.pos;
+                if self.current_kind() == TokenKind::DotDot {
+                    children.push(SyntaxElement::Token(self.bump())); // ..
+                    children.extend(self.eat_trivia());
+                }
+
+                if self.is_naming_ident() {
+                    children.push(SyntaxElement::Token(self.bump())); // param name
+                } else {
+                    children.push(SyntaxElement::Token(self.bump()));
+                }
+
+                children.extend(self.eat_trivia());
+                if self.current_kind() == TokenKind::Comma {
+                    children.push(SyntaxElement::Token(self.bump()));
+                    children.extend(self.eat_trivia());
+                }
+
+                if self.pos == start {
+                    self.bump();
+                }
+            }
+
+            if self.current_kind() == close {
+                children.push(SyntaxElement::Token(self.bump()));
+            }
+        }
+
+        children.extend(self.eat_trivia());
+        if self.current_kind() == TokenKind::OpenBrace {
+            children.push(SyntaxElement::Node(self.parse_block()));
+        }
+
+        SyntaxNode::new(NodeKind::MacroDecl, children)
+    }
+
     fn parse_echo_after_keyword(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
         children.extend(self.eat_trivia());
         if self.current_kind() == TokenKind::OpenBrace {
@@ -1168,7 +1236,11 @@ impl Parser {
         let mut children = vec![];
         children.push(SyntaxElement::Token(self.bump())); // raw
         children.extend(self.eat_trivia());
-        children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+        if self.current_kind() == TokenKind::OpenBrace {
+            children.push(SyntaxElement::Node(self.parse_block()));
+        } else {
+            children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+        }
         SyntaxNode::new(NodeKind::RawExpr, children)
     }
 
@@ -1297,5 +1369,17 @@ mod tests {
             }
         });
         assert!(has_attr, "Should have Attribute node");
+    }
+
+    #[test]
+    fn test_parse_macro_decl() {
+        let node = parse_test("macro add_one(x) { x + 1 }");
+        assert_eq!(node.kind, NodeKind::MacroDecl);
+        assert!(
+            node.children
+                .iter()
+                .any(|c| matches!(c, SyntaxElement::Node(n) if n.kind == NodeKind::Block)),
+            "macro declaration should contain a body block"
+        );
     }
 }

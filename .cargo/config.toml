@@ -1,2 +1,2 @@
 [env]
-LLVM_SYS_170_PREFIX = "/usr/lib/llvm-17"
+LLVM_SYS_170_PREFIX = "/usr/lib64/llvm17"

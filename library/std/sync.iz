@@ -1,0 +1,51 @@
+// library/std/sync.iz
+
+shape Mutex<T> {
+    handle: *mut void,
+}
+
+shape RwLock<T> {
+    handle: *mut void,
+}
+
+shape Condvar {
+    handle: *mut void,
+}
+
+shape Barrier {
+    handle: *mut void,
+}
+
+shape Once {
+    handle: *mut void,
+}
+
+impl<T> Mutex<T> {
+    open forge new(value: T) -> Mutex<T> {
+        Mutex { handle: std::ptr::null_mut() as *mut void }
+    }
+}
+
+impl<T> RwLock<T> {
+    open forge new(value: T) -> RwLock<T> {
+        RwLock { handle: std::ptr::null_mut() as *mut void }
+    }
+}
+
+impl Condvar {
+    open forge new() -> Condvar {
+        Condvar { handle: std::ptr::null_mut() as *mut void }
+    }
+}
+
+impl Barrier {
+    open forge new(parties: usize) -> Barrier {
+        Barrier { handle: std::ptr::null_mut() as *mut void }
+    }
+}
+
+impl Once {
+    open forge new() -> Once {
+        Once { handle: std::ptr::null_mut() as *mut void }
+    }
+}

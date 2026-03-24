@@ -15,6 +15,7 @@ pub enum NodeKind {
     TypeAlias,
     Type,
     DrawDecl,
+    MacroDecl,
     Attribute,
     Attributes,
     RawExpr,

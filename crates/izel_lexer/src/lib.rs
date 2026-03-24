@@ -11,6 +11,7 @@ pub enum TokenKind {
     Scroll,
     Weave,
     Ward,
+    Macro,
     Echo,
     Branch,
     Given,

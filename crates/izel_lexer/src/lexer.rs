@@ -200,6 +200,7 @@ impl<'a> Lexer<'a> {
             "scroll" => TokenKind::Scroll,
             "weave" => TokenKind::Weave,
             "ward" => TokenKind::Ward,
+            "macro" => TokenKind::Macro,
             "echo" => TokenKind::Echo,
             "branch" => TokenKind::Branch,
             "given" => TokenKind::Given,

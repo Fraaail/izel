@@ -1,0 +1,29 @@
+// library/std/io.iz
+
+shape Stdin {
+}
+
+shape Stdout {
+}
+
+shape Stderr {
+}
+
+weave Read {
+    forge read(&~self, buf: &~[u8]) -> Result<usize, ()>
+}
+
+weave Write {
+    forge write(&~self, buf: &[u8]) -> Result<usize, ()>
+    forge flush(&~self) -> Result<void, ()>
+}
+
+weave Seek {
+    forge seek(&~self, offset: i64, origin: i32) -> Result<u64, ()>
+}
+
+forge stdin() -> Stdin
+forge stdout() -> Stdout
+forge stderr() -> Stderr
+forge println(msg: str)
+forge eprintln(msg: str)

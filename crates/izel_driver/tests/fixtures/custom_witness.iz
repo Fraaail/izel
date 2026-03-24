@@ -1,0 +1,15 @@
+shape IsPositive {
+}
+
+@proof forge prove_positive(n: i32) -> Witness<IsPositive> {
+    Witness::<IsPositive>::new()
+}
+
+forge sqrt_positive(n: i32, _proof: Witness<IsPositive>) -> f64 {
+    give 0.0
+}
+
+forge main() {
+    let proof = prove_positive(9)
+    let _v = sqrt_positive(9, proof)
+}

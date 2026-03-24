@@ -15,8 +15,15 @@ pub enum HirItem {
     Forge(Box<HirForge>),
     Shape(HirShape),
     Scroll(HirScroll),
+    Echo(HirEcho),
     Ward(HirWard),
     Draw(HirDraw),
+}
+
+#[derive(Debug, Clone)]
+pub struct HirEcho {
+    pub body: HirBlock,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

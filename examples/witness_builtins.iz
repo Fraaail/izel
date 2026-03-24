@@ -10,7 +10,7 @@
 
 // Safe division: the NonZero<i32> proof eliminates the need for runtime checks
 forge divide(a: i32, b: NonZero<i32>) -> i32 {
-    a / b
+    a / b.value()
 }
 
 // --- InBounds<T> ---

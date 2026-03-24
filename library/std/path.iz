@@ -1,0 +1,9 @@
+// library/std/path.iz
+
+shape Path {
+    inner: str,
+}
+
+shape PathBuf {
+    inner: str,
+}

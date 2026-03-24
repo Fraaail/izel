@@ -1,0 +1,26 @@
+// library/std/thread.iz
+
+// Join handle returned by thread::spawn.
+shape JoinHandle<T> {
+    handle: *mut void,
+}
+
+impl<T> JoinHandle<T> {
+    // Wait for the spawned thread to finish and return the produced value.
+    open forge join(&~self) -> Result<T, ()> !thread {
+        Result::Err(())
+    }
+}
+
+// Spawn a new OS thread.
+open forge spawn<T, F>(_task: F) -> JoinHandle<T> {
+    JoinHandle { handle: std::ptr::null_mut() as *mut void }
+}
+
+// Put the current thread to sleep for a duration in milliseconds.
+open forge sleep(ms: u64) {
+}
+
+// Park the current thread until explicitly resumed.
+open forge park() {
+}

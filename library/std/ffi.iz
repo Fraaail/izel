@@ -1,0 +1,12 @@
+// library/std/ffi.iz
+
+shape CStr {
+    ptr: *u8,
+}
+
+shape CString {
+    ptr: *u8,
+}
+
+forge cstr_from_ptr(ptr: *u8) -> CStr
+forge cstring_new(s: str) -> Result<CString, ()>

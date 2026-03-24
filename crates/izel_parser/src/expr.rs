@@ -117,60 +117,79 @@ impl Parser {
             }
             TokenKind::Ident | TokenKind::SelfKw | TokenKind::SelfType => {
                 let token = self.bump();
-                let text = &self.source[token.span.lo.0 as usize..token.span.hi.0 as usize];
                 children.push(SyntaxElement::Token(token));
 
-                // Inspect for here!()
-                if text == "here" {
-                    let mut peek_trivia = Vec::new();
-                    let mut offset = 0;
-                    while let Some(t) = self.tokens.get(self.pos + offset) {
-                        if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Comment {
-                            peek_trivia.push(SyntaxElement::Token(*t));
-                            offset += 1;
-                        } else {
-                            break;
-                        }
+                let mut offset = 0;
+                while let Some(t) = self.tokens.get(self.pos + offset) {
+                    if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Comment {
+                        offset += 1;
+                    } else {
+                        break;
                     }
-                    if let Some(t) = self.tokens.get(self.pos + offset) {
-                        if t.kind == TokenKind::Bang {
-                            // Consume trivia and !
+                }
+
+                if let Some(t) = self.tokens.get(self.pos + offset) {
+                    if t.kind == TokenKind::Bang {
+                        let mut after_bang_offset = offset + 1;
+                        while let Some(next) = self.tokens.get(self.pos + after_bang_offset) {
+                            if next.kind == TokenKind::Whitespace || next.kind == TokenKind::Comment
+                            {
+                                after_bang_offset += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        let is_macro_invocation = self
+                            .tokens
+                            .get(self.pos + after_bang_offset)
+                            .map(|next| {
+                                matches!(next.kind, TokenKind::OpenParen | TokenKind::OpenBracket)
+                            })
+                            .unwrap_or(false);
+
+                        if is_macro_invocation {
                             for _ in 0..offset {
                                 children.push(SyntaxElement::Token(self.bump()));
                             }
+
                             children.push(SyntaxElement::Token(self.bump())); // !
+                            children.extend(self.eat_trivia());
 
-                            // Expect ()
-                            let mut offset_paren = 0;
-                            while let Some(pt) = self.tokens.get(self.pos + offset_paren) {
-                                if pt.kind == TokenKind::Whitespace || pt.kind == TokenKind::Comment
-                                {
-                                    offset_paren += 1;
-                                } else {
-                                    break;
+                            let open = self.current_kind();
+                            let close = if open == TokenKind::OpenParen {
+                                TokenKind::CloseParen
+                            } else {
+                                TokenKind::CloseBracket
+                            };
+
+                            children.push(SyntaxElement::Token(self.bump()));
+                            children.extend(self.eat_trivia());
+
+                            while self.current_kind() != close
+                                && self.current_kind() != TokenKind::Eof
+                            {
+                                let mut arg_children = self.eat_trivia();
+                                arg_children
+                                    .push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+
+                                children.push(SyntaxElement::Node(SyntaxNode::new(
+                                    NodeKind::Arg,
+                                    arg_children,
+                                )));
+                                children.extend(self.eat_trivia());
+
+                                if self.current_kind() == TokenKind::Comma {
+                                    children.push(SyntaxElement::Token(self.bump()));
+                                    children.extend(self.eat_trivia());
                                 }
                             }
 
-                            if let Some(pt) = self.tokens.get(self.pos + offset_paren) {
-                                if pt.kind == TokenKind::OpenParen {
-                                    for _ in 0..offset_paren {
-                                        children.push(SyntaxElement::Token(self.bump()));
-                                    }
-                                    children.push(SyntaxElement::Token(self.bump())); // (
-
-                                    // skip until )
-                                    while self.current_kind() != TokenKind::CloseParen
-                                        && self.current_kind() != TokenKind::Eof
-                                    {
-                                        children.push(SyntaxElement::Token(self.bump()));
-                                    }
-                                    if self.current_kind() == TokenKind::CloseParen {
-                                        children.push(SyntaxElement::Token(self.bump()));
-                                        // )
-                                    }
-                                    return SyntaxNode::new(NodeKind::MacroCall, children);
-                                }
+                            if self.current_kind() == close {
+                                children.push(SyntaxElement::Token(self.bump()));
                             }
+
+                            return SyntaxNode::new(NodeKind::MacroCall, children);
                         }
                     }
                 }

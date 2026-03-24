@@ -1,0 +1,21 @@
+// library/std/math.iz
+
+// Mathematical constants exposed by std::math.
+open forge PI() -> f64
+open forge E() -> f64
+open forge INFINITY() -> f64
+open forge NAN() -> f64
+
+// Trigonometric functions.
+open forge sin(x: f64) -> f64
+open forge cos(x: f64) -> f64
+open forge tan(x: f64) -> f64
+open forge asin(x: f64) -> f64
+open forge acos(x: f64) -> f64
+open forge atan(x: f64) -> f64
+
+// Exponential and logarithmic functions.
+open forge exp(x: f64) -> f64
+open forge ln(x: f64) -> f64
+open forge log(x: f64, base: f64) -> f64
+open forge sqrt(x: f64) -> f64

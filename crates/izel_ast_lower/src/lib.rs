@@ -1,4 +1,7 @@
 #![allow(clippy::match_like_matches_macro)]
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use izel_lexer::TokenKind;
 use izel_parser::ast;
 use izel_parser::cst::{NodeKind, SyntaxElement, SyntaxNode};
@@ -8,11 +11,15 @@ pub mod elaboration;
 
 pub struct Lowerer<'a> {
     source: &'a str,
+    macros: RefCell<HashMap<String, ast::MacroDecl>>,
 }
 
 impl<'a> Lowerer<'a> {
     pub fn new(source: &'a str) -> Self {
-        Self { source }
+        Self {
+            source,
+            macros: RefCell::new(HashMap::new()),
+        }
     }
 
     pub fn lower_module(&self, node: &SyntaxNode) -> ast::Module {
@@ -44,6 +51,11 @@ impl<'a> Lowerer<'a> {
             NodeKind::DrawDecl => results.push(ast::Item::Draw(self.lower_draw(node))),
             NodeKind::ImplBlock => results.push(ast::Item::Impl(self.lower_impl(node))),
             NodeKind::TypeAlias => results.push(ast::Item::Alias(self.lower_alias(node))),
+            NodeKind::MacroDecl => {
+                let m = self.lower_macro(node);
+                self.macros.borrow_mut().insert(m.name.clone(), m.clone());
+                results.push(ast::Item::Macro(m));
+            }
             NodeKind::StaticDecl => results.push(ast::Item::Static(self.lower_static(node))),
             NodeKind::EchoDecl => results.push(ast::Item::Echo(self.lower_echo(node))),
             NodeKind::BridgeDecl => results.push(ast::Item::Bridge(self.lower_bridge(node))),
@@ -116,6 +128,64 @@ impl<'a> Lowerer<'a> {
         ast::Echo {
             body,
             attributes,
+            span: node.span(),
+        }
+    }
+
+    fn lower_macro(&self, node: &SyntaxNode) -> ast::MacroDecl {
+        let mut name = String::new();
+        let mut params = Vec::new();
+        let mut body = ast::Block {
+            stmts: vec![],
+            expr: None,
+            span: node.span(),
+        };
+
+        let mut saw_macro_keyword = false;
+        let mut expect_param = false;
+        let mut param_variadic = false;
+
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(t) => match t.kind {
+                    TokenKind::Macro => {
+                        saw_macro_keyword = true;
+                    }
+                    TokenKind::Ident if saw_macro_keyword && name.is_empty() => {
+                        name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                        saw_macro_keyword = false;
+                    }
+                    TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::Comma => {
+                        expect_param = true;
+                        param_variadic = false;
+                    }
+                    TokenKind::DotDot => {
+                        param_variadic = true;
+                        expect_param = true;
+                    }
+                    TokenKind::Ident if expect_param => {
+                        params.push(ast::MacroParam {
+                            name: self.source[t.span.lo.0 as usize..t.span.hi.0 as usize]
+                                .to_string(),
+                            is_variadic: param_variadic,
+                            span: t.span,
+                        });
+                        expect_param = false;
+                        param_variadic = false;
+                    }
+                    _ => {}
+                },
+                SyntaxElement::Node(n) if n.kind == NodeKind::Block => {
+                    body = self.lower_block(n);
+                }
+                _ => {}
+            }
+        }
+
+        ast::MacroDecl {
+            name,
+            params,
+            body,
             span: node.span(),
         }
     }
@@ -1133,19 +1203,32 @@ impl<'a> Lowerer<'a> {
                 ast::Expr::Member(Box::new(target), name, node.span())
             }
             NodeKind::PathExpr => {
+                fn collect_path_idents(node: &SyntaxNode, source: &str, out: &mut Vec<String>) {
+                    for child in &node.children {
+                        match child {
+                            SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
+                                out.push(
+                                    source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string(),
+                                );
+                            }
+                            SyntaxElement::Node(n)
+                                if n.kind == NodeKind::Ident || n.kind == NodeKind::PathExpr =>
+                            {
+                                collect_path_idents(n, source, out);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 let mut path = Vec::new();
                 let mut generic_args = Vec::new();
+                collect_path_idents(node, self.source, &mut path);
                 for child in &node.children {
-                    match child {
-                        SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
-                            path.push(
-                                self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string(),
-                            );
-                        }
-                        SyntaxElement::Node(n) if n.kind == NodeKind::GenericArgs => {
+                    if let SyntaxElement::Node(n) = child {
+                        if n.kind == NodeKind::GenericArgs {
                             generic_args = self.lower_generic_args(n);
                         }
-                        _ => {}
                     }
                 }
                 ast::Expr::Path(path, generic_args)
@@ -1190,17 +1273,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             NodeKind::MacroCall => {
-                let mut macro_name = String::new();
-                for child in &node.children {
-                    if let SyntaxElement::Token(t) = child {
-                        if t.kind == TokenKind::Ident {
-                            macro_name =
-                                self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
-                            break;
-                        }
-                    }
-                }
-
+                let (macro_name, args) = self.lower_macro_call(node);
                 if macro_name == "here" {
                     // Calculate line number dynamically based on the node's span.
                     let span = node.span();
@@ -1209,6 +1282,22 @@ impl<'a> Lowerer<'a> {
 
                     let location_string = format!("{}:{}", "main.iz", line_number);
                     ast::Expr::Literal(ast::Literal::Str(location_string))
+                } else if macro_name == "asm" {
+                    // Keep inline assembly as a first-class builtin call for later semantic checks.
+                    let call_args = args
+                        .into_iter()
+                        .map(|value| ast::Arg {
+                            label: None,
+                            value,
+                            span: node.span(),
+                        })
+                        .collect();
+                    ast::Expr::Call(
+                        Box::new(ast::Expr::Ident("asm".to_string(), node.span())),
+                        call_args,
+                    )
+                } else if let Some(macro_decl) = self.macros.borrow().get(&macro_name).cloned() {
+                    self.expand_macro_call(&macro_decl, &args)
                 } else {
                     ast::Expr::Literal(ast::Literal::Nil)
                 }
@@ -1878,6 +1967,184 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn lower_macro_call(&self, node: &SyntaxNode) -> (String, Vec<ast::Expr>) {
+        let mut macro_name = String::new();
+        let mut args = Vec::new();
+
+        for child in &node.children {
+            match child {
+                SyntaxElement::Token(t) if t.kind == TokenKind::Ident && macro_name.is_empty() => {
+                    macro_name =
+                        self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
+                }
+                SyntaxElement::Node(n) if n.kind == NodeKind::Arg => {
+                    for gc in &n.children {
+                        if let SyntaxElement::Node(expr_node) = gc {
+                            args.push(self.lower_expr(expr_node));
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        (macro_name, args)
+    }
+
+    fn expand_macro_call(&self, macro_decl: &ast::MacroDecl, args: &[ast::Expr]) -> ast::Expr {
+        if macro_decl.params.iter().any(|p| p.is_variadic) {
+            return ast::Expr::Literal(ast::Literal::Nil);
+        }
+
+        if macro_decl.params.len() != args.len() {
+            return ast::Expr::Literal(ast::Literal::Nil);
+        }
+
+        let mut subst = HashMap::new();
+        for (param, arg) in macro_decl.params.iter().zip(args.iter()) {
+            subst.insert(param.name.clone(), arg.clone());
+        }
+
+        ast::Expr::Block(self.substitute_block(&macro_decl.body, &subst))
+    }
+
+    fn substitute_block(
+        &self,
+        block: &ast::Block,
+        subst: &HashMap<String, ast::Expr>,
+    ) -> ast::Block {
+        ast::Block {
+            stmts: block
+                .stmts
+                .iter()
+                .map(|stmt| self.substitute_stmt(stmt, subst))
+                .collect(),
+            expr: block
+                .expr
+                .as_ref()
+                .map(|expr| Box::new(self.substitute_expr(expr, subst))),
+            span: block.span,
+        }
+    }
+
+    fn substitute_stmt(&self, stmt: &ast::Stmt, subst: &HashMap<String, ast::Expr>) -> ast::Stmt {
+        match stmt {
+            ast::Stmt::Expr(expr) => ast::Stmt::Expr(self.substitute_expr(expr, subst)),
+            ast::Stmt::Let {
+                pat,
+                ty,
+                init,
+                span,
+            } => ast::Stmt::Let {
+                pat: pat.clone(),
+                ty: ty.clone(),
+                init: init.as_ref().map(|expr| self.substitute_expr(expr, subst)),
+                span: *span,
+            },
+        }
+    }
+
+    fn substitute_expr(&self, expr: &ast::Expr, subst: &HashMap<String, ast::Expr>) -> ast::Expr {
+        match expr {
+            ast::Expr::Ident(name, _) => subst.get(name).cloned().unwrap_or_else(|| expr.clone()),
+            ast::Expr::Binary(op, lhs, rhs) => ast::Expr::Binary(
+                op.clone(),
+                Box::new(self.substitute_expr(lhs, subst)),
+                Box::new(self.substitute_expr(rhs, subst)),
+            ),
+            ast::Expr::Unary(op, inner) => {
+                ast::Expr::Unary(op.clone(), Box::new(self.substitute_expr(inner, subst)))
+            }
+            ast::Expr::Call(callee, args) => ast::Expr::Call(
+                Box::new(self.substitute_expr(callee, subst)),
+                args.iter()
+                    .map(|arg| ast::Arg {
+                        label: arg.label.clone(),
+                        value: self.substitute_expr(&arg.value, subst),
+                        span: arg.span,
+                    })
+                    .collect(),
+            ),
+            ast::Expr::Member(base, name, span) => ast::Expr::Member(
+                Box::new(self.substitute_expr(base, subst)),
+                name.clone(),
+                *span,
+            ),
+            ast::Expr::Block(block) => ast::Expr::Block(self.substitute_block(block, subst)),
+            ast::Expr::Given {
+                cond,
+                then_block,
+                else_expr,
+            } => ast::Expr::Given {
+                cond: Box::new(self.substitute_expr(cond, subst)),
+                then_block: self.substitute_block(then_block, subst),
+                else_expr: else_expr
+                    .as_ref()
+                    .map(|expr| Box::new(self.substitute_expr(expr, subst))),
+            },
+            ast::Expr::While { cond, body } => ast::Expr::While {
+                cond: Box::new(self.substitute_expr(cond, subst)),
+                body: self.substitute_block(body, subst),
+            },
+            ast::Expr::Zone { name, body } => ast::Expr::Zone {
+                name: name.clone(),
+                body: self.substitute_block(body, subst),
+            },
+            ast::Expr::Each { var, iter, body } => ast::Expr::Each {
+                var: var.clone(),
+                iter: Box::new(self.substitute_expr(iter, subst)),
+                body: self.substitute_block(body, subst),
+            },
+            ast::Expr::Bind { params, body } => ast::Expr::Bind {
+                params: params.clone(),
+                body: Box::new(self.substitute_expr(body, subst)),
+            },
+            ast::Expr::Branch { target, arms } => ast::Expr::Branch {
+                target: Box::new(self.substitute_expr(target, subst)),
+                arms: arms
+                    .iter()
+                    .map(|arm| ast::Arm {
+                        pattern: arm.pattern.clone(),
+                        guard: arm.guard.as_ref().map(|g| self.substitute_expr(g, subst)),
+                        body: self.substitute_expr(&arm.body, subst),
+                        span: arm.span,
+                    })
+                    .collect(),
+            },
+            ast::Expr::Seek {
+                body,
+                catch_var,
+                catch_body,
+            } => ast::Expr::Seek {
+                body: self.substitute_block(body, subst),
+                catch_var: catch_var.clone(),
+                catch_body: catch_body
+                    .as_ref()
+                    .map(|block| self.substitute_block(block, subst)),
+            },
+            ast::Expr::Raw(inner) => ast::Expr::Raw(Box::new(self.substitute_expr(inner, subst))),
+            ast::Expr::Return(inner) => {
+                ast::Expr::Return(Box::new(self.substitute_expr(inner, subst)))
+            }
+            ast::Expr::StructLiteral { path, fields } => ast::Expr::StructLiteral {
+                path: path.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(name, value)| (name.clone(), self.substitute_expr(value, subst)))
+                    .collect(),
+            },
+            ast::Expr::Cascade { expr, context } => ast::Expr::Cascade {
+                expr: Box::new(self.substitute_expr(expr, subst)),
+                context: context
+                    .as_ref()
+                    .map(|ctx| Box::new(self.substitute_expr(ctx, subst))),
+            },
+            ast::Expr::Tide(inner) => ast::Expr::Tide(Box::new(self.substitute_expr(inner, subst))),
+            _ => expr.clone(),
+        }
+    }
+
     fn lower_static(&self, node: &SyntaxNode) -> ast::Static {
         let visibility = self.lower_visibility(node);
         let mut name = String::new();
@@ -1885,11 +2152,21 @@ impl<'a> Lowerer<'a> {
         let mut value = None;
         let mut is_mut = false;
         let mut attributes = Vec::new();
+        let mut expect_type = false;
+        let mut expect_value = false;
 
         for child in &node.children {
             match child {
                 SyntaxElement::Node(n) if n.kind == NodeKind::Attributes => {
                     attributes = self.lower_attributes(n);
+                }
+                SyntaxElement::Token(t) if t.kind == TokenKind::Colon => {
+                    expect_type = true;
+                    expect_value = false;
+                }
+                SyntaxElement::Token(t) if t.kind == TokenKind::Equal => {
+                    expect_value = true;
+                    expect_type = false;
                 }
                 SyntaxElement::Token(t) if t.kind == TokenKind::Tilde => {
                     is_mut = true;
@@ -1897,11 +2174,13 @@ impl<'a> Lowerer<'a> {
                 SyntaxElement::Token(t) if self.is_naming_ident(t.kind) => {
                     name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
                 }
-                SyntaxElement::Node(n) if n.kind == NodeKind::Type => {
+                SyntaxElement::Node(n) if expect_type => {
                     ty = self.lower_type(n);
+                    expect_type = false;
                 }
-                SyntaxElement::Node(n) => {
+                SyntaxElement::Node(n) if expect_value => {
                     value = Some(self.lower_expr(n));
+                    expect_value = false;
                 }
                 _ => {}
             }
@@ -1923,6 +2202,8 @@ impl<'a> Lowerer<'a> {
 mod tests {
     use super::*;
     use izel_lexer::{Lexer, Token, TokenKind};
+    use izel_parser::Parser;
+    use izel_span::SourceId;
 
     fn tokenize(source: &str) -> Vec<Token> {
         let mut lexer = Lexer::new(source, izel_span::SourceId(0));
@@ -2096,6 +2377,201 @@ mod tests {
             assert!(has_shape && has_encode && has_decode);
         } else {
             panic!("Expected Dual item");
+        }
+    }
+
+    #[test]
+    fn test_lower_dual_decl_generates_missing_encode_from_decode() {
+        let source =
+            "dual shape JsonFormat<T> { forge decode(&self, raw: JsonValue) -> T { raw } }";
+
+        let source_id = SourceId(0);
+        let mut lexer = Lexer::new(source, source_id);
+        let mut tokens = Vec::new();
+
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+
+        if let ast::Item::Dual(d) = &items[0] {
+            let mut found_encode = false;
+            let mut found_decode = false;
+
+            for it in &d.items {
+                if let ast::Item::Forge(f) = it {
+                    if f.name == "encode" {
+                        found_encode = true;
+                    }
+                    if f.name == "decode" {
+                        found_decode = true;
+                    }
+                }
+            }
+
+            assert!(
+                found_encode && found_decode,
+                "Both encode and decode should be present after elaboration"
+            );
+        } else {
+            panic!("Expected a Dual item");
+        }
+    }
+
+    #[test]
+    fn test_lower_dual_effectful_generates_roundtrip_test_item() {
+        let source = "dual shape JsonFormat<T> { forge encode(&self, val: &T) !io { val } forge decode(&self, raw: JsonValue) !net { raw } }";
+
+        let source_id = SourceId(0);
+        let mut lexer = Lexer::new(source, source_id);
+        let mut tokens = Vec::new();
+
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+
+        assert_eq!(
+            items.len(),
+            2,
+            "effectful dual should also generate a test item"
+        );
+
+        let mut expected_effects = Vec::new();
+        for item in &items {
+            if let ast::Item::Dual(d) = item {
+                for inner in &d.items {
+                    if let ast::Item::Forge(f) = inner {
+                        if f.name == "encode" || f.name == "decode" {
+                            for eff in &f.effects {
+                                if !expected_effects.contains(eff) {
+                                    expected_effects.push(eff.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut has_test = false;
+        for item in items {
+            if let ast::Item::Forge(f) = item {
+                if f.name.ends_with("_test") {
+                    has_test = f.attributes.iter().any(|a| a.name == "test");
+                    for eff in &expected_effects {
+                        assert!(
+                            f.effects.contains(eff),
+                            "generated roundtrip test missing expected effect: {}",
+                            eff
+                        );
+                    }
+                    assert!(
+                        f.effects.len() >= expected_effects.len(),
+                        "generated roundtrip test should include effects from encode/decode"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            has_test,
+            "expected generated #[test] forge for effectful dual"
+        );
+    }
+
+    #[test]
+    fn test_lower_declarative_macro_and_expand_call() {
+        let source = r#"
+            macro add_one(x) { x + 1 }
+
+            forge main() {
+                let y = add_one!(41)
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+
+        let lowerer = Lowerer::new(source);
+        let module = lowerer.lower_module(&cst);
+
+        assert!(
+            module
+                .items
+                .iter()
+                .any(|item| matches!(item, ast::Item::Macro(m) if m.name == "add_one")),
+            "module should contain lowered macro declaration"
+        );
+
+        let main = module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Forge(f) = item {
+                    if f.name == "main" {
+                        return Some(f);
+                    }
+                }
+                None
+            })
+            .expect("expected main forge");
+
+        let body = main.body.as_ref().expect("main should have body");
+        let let_init = body
+            .stmts
+            .iter()
+            .find_map(|stmt| {
+                if let ast::Stmt::Let { init, .. } = stmt {
+                    return init.as_ref();
+                }
+                None
+            })
+            .expect("expected let initializer");
+
+        match let_init {
+            ast::Expr::Block(block) => match block.expr.as_ref().map(|e| e.as_ref()) {
+                Some(ast::Expr::Binary(ast::BinaryOp::Add, lhs, rhs)) => {
+                    assert!(matches!(
+                        lhs.as_ref(),
+                        ast::Expr::Literal(ast::Literal::Int(41))
+                    ));
+                    assert!(matches!(
+                        rhs.as_ref(),
+                        ast::Expr::Literal(ast::Literal::Int(1))
+                    ));
+                }
+                other => panic!(
+                    "expected expanded binary expr in macro body, got {:?}",
+                    other
+                ),
+            },
+            other => panic!(
+                "expected macro expansion to lower to block expression, got {:?}",
+                other
+            ),
         }
     }
 }
