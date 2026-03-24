@@ -127,7 +127,7 @@
 
 ## 26. Raw Blocks & FFI — `raw` / `bridge`
 - [x] 26.1 `raw` Blocks
-- [ ] 26.2 `bridge` — C/C++ FFI
+- [x] 26.2 `bridge` — C/C++ FFI
 - [ ] 26.3 Inline Assembly
 
 ## 27. Architecture Overview

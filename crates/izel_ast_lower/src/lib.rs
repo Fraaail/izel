@@ -2138,11 +2138,21 @@ impl<'a> Lowerer<'a> {
         let mut value = None;
         let mut is_mut = false;
         let mut attributes = Vec::new();
+        let mut expect_type = false;
+        let mut expect_value = false;
 
         for child in &node.children {
             match child {
                 SyntaxElement::Node(n) if n.kind == NodeKind::Attributes => {
                     attributes = self.lower_attributes(n);
+                }
+                SyntaxElement::Token(t) if t.kind == TokenKind::Colon => {
+                    expect_type = true;
+                    expect_value = false;
+                }
+                SyntaxElement::Token(t) if t.kind == TokenKind::Equal => {
+                    expect_value = true;
+                    expect_type = false;
                 }
                 SyntaxElement::Token(t) if t.kind == TokenKind::Tilde => {
                     is_mut = true;
@@ -2150,11 +2160,13 @@ impl<'a> Lowerer<'a> {
                 SyntaxElement::Token(t) if self.is_naming_ident(t.kind) => {
                     name = self.source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string();
                 }
-                SyntaxElement::Node(n) if n.kind == NodeKind::Type => {
+                SyntaxElement::Node(n) if expect_type => {
                     ty = self.lower_type(n);
+                    expect_type = false;
                 }
-                SyntaxElement::Node(n) => {
+                SyntaxElement::Node(n) if expect_value => {
                     value = Some(self.lower_expr(n));
+                    expect_value = false;
                 }
                 _ => {}
             }

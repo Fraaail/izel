@@ -540,6 +540,59 @@ impl TypeChecker {
         }
     }
 
+    fn validate_bridge_declarations(&mut self, b: &ast::Bridge) {
+        match b.abi.as_deref() {
+            Some("C") | Some("C++") => {}
+            Some(other) => {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "bridge ABI '{}' is not supported; expected \"C\" or \"C++\"",
+                        other
+                    )));
+            }
+            None => {
+                self.diagnostics.push(
+                    izel_diagnostics::Diagnostic::error().with_message(
+                        "bridge declaration requires an explicit ABI string (for example, \"C\")"
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+
+        for item in &b.items {
+            match item {
+                ast::Item::Forge(f) => {
+                    if f.body.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "bridge forge '{}' must be a declaration without a body",
+                                f.name
+                            )));
+                    }
+                }
+                ast::Item::Static(st) => {
+                    if st.value.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "bridge static '{}' cannot define an initializer",
+                                st.name
+                            )));
+                    }
+                }
+                _ => {
+                    self.diagnostics
+                        .push(
+                            izel_diagnostics::Diagnostic::error().with_message(
+                                "bridge blocks may only contain forge and static declarations"
+                                    .to_string(),
+                            ),
+                        );
+                }
+            }
+        }
+    }
+
     fn check_echo(&mut self, e: &ast::Echo) {
         let body_effects = self.new_effect_var();
         self.current_effects.push(body_effects.clone());
@@ -1037,6 +1090,7 @@ impl TypeChecker {
                         ),
                     );
                 }
+                self.validate_bridge_declarations(b);
                 // ABI-specific registration stub
                 for it in &b.items {
                     self.collect_item_signature(it);
@@ -3152,6 +3206,93 @@ mod tests {
             tc.diagnostics.is_empty(),
             "legacy raw expr witness bypass should remain valid, diagnostics: {:?}",
             tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_bridge_c_declarations_are_accepted() {
+        let source = "bridge \"C\" { forge malloc(size: usize) -> *u8 static errno: i32 }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid C bridge declarations should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_bridge_requires_supported_abi() {
+        let source = "bridge \"Rust\" { forge f() }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("bridge ABI")),
+            "unsupported bridge ABI should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_bridge_forge_rejects_body() {
+        let source = "bridge \"C\" { forge f() { give } }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("must be a declaration without a body")),
+            "bridge forge body should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_bridge_static_rejects_initializer() {
+        let source = "bridge \"C\" { static errno: i32 = 1 }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("cannot define an initializer")),
+            "bridge static initializer should produce a diagnostic"
         );
     }
 
