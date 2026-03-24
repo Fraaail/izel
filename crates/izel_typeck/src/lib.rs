@@ -11,6 +11,12 @@ pub mod contracts;
 pub use izel_parser::contracts::ContractChecker;
 pub use izel_parser::eval::{eval_expr, ConstValue};
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShapeLayout {
+    pub packed: bool,
+    pub align: Option<u32>,
+}
+
 pub struct TypeChecker {
     /// Resolved types for each DefId
     pub def_types: FxHashMap<DefId, Type>,
@@ -19,6 +25,7 @@ pub struct TypeChecker {
     pub substitutions: FxHashMap<usize, Type>,
     pub effect_substitutions: FxHashMap<usize, EffectSet>,
     pub env: Vec<FxHashMap<String, Scheme>>,
+    pub overload_env: FxHashMap<String, Vec<Scheme>>,
     pub expected_ret: Option<Type>,
     pub current_level: usize,
     pub var_levels: FxHashMap<usize, usize>,
@@ -32,7 +39,8 @@ pub struct TypeChecker {
     pub in_raw_block: bool,
     pub diagnostics: Vec<izel_diagnostics::Diagnostic>,
     pub shape_invariants: FxHashMap<String, Vec<ast::Expr>>,
-    pub method_env: FxHashMap<String, FxHashMap<String, Scheme>>,
+    pub shape_layouts: FxHashMap<String, ShapeLayout>,
+    pub method_env: FxHashMap<String, FxHashMap<String, Vec<Scheme>>>,
     pub current_self: Option<Type>,
     pub in_flow_context: bool,
     pub ast_modules: std::collections::HashMap<String, ast::Module>,
@@ -54,6 +62,7 @@ impl TypeChecker {
             substitutions: FxHashMap::default(),
             effect_substitutions: FxHashMap::default(),
             env: vec![FxHashMap::default()], // Global scope
+            overload_env: FxHashMap::default(),
             expected_ret: None,
             current_level: 0,
             var_levels: FxHashMap::default(),
@@ -67,6 +76,7 @@ impl TypeChecker {
             in_raw_block: false,
             diagnostics: Vec::new(),
             shape_invariants: FxHashMap::default(),
+            shape_layouts: FxHashMap::default(),
             method_env: FxHashMap::default(),
             current_self: None,
             in_flow_context: false,
@@ -191,6 +201,19 @@ impl TypeChecker {
         if let Some(scope) = self.env.last_mut() {
             scope.insert(name, scheme);
         }
+    }
+
+    fn register_overload(&mut self, name: String, scheme: Scheme) {
+        self.overload_env.entry(name).or_default().push(scheme);
+    }
+
+    fn register_method_overload(&mut self, target: &str, method: &str, scheme: Scheme) {
+        self.method_env
+            .entry(target.to_string())
+            .or_default()
+            .entry(method.to_string())
+            .or_default()
+            .push(scheme);
     }
 
     pub fn resolve_scheme(&self, name: &str) -> Option<Scheme> {
@@ -344,20 +367,19 @@ impl TypeChecker {
 
             let collected = self.current_effects.pop().unwrap();
 
-            // Unify body effects with declared/inferred effects
-            if let Some(sig) = self.resolve_name(&f.name) {
-                if let Type::Function {
-                    effects: declared, ..
-                } = self.prune(&sig)
-                {
-                    if !self.unify_effects(&collected, &declared) {
-                        self.diagnostics
-                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
-                                "Function has effects {:?} but only declared {:?}",
-                                self.prune_effects(&collected),
-                                declared
-                            )));
-                    }
+            // Unify body effects with this forge's declared effects.
+            let declared_sig = self.collect_forge_signature(f);
+            if let Type::Function {
+                effects: declared, ..
+            } = self.prune(&declared_sig.ty)
+            {
+                if !self.unify_effects(&collected, &declared) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "Function has effects {:?} but only declared {:?}",
+                            self.prune_effects(&collected),
+                            declared
+                        )));
                 }
             }
 
@@ -488,10 +510,7 @@ impl TypeChecker {
                     for item in &i.items {
                         if let ast::Item::Forge(f) = item {
                             let scheme = self.collect_forge_signature(f);
-                            self.method_env
-                                .entry(target_name.clone())
-                                .or_default()
-                                .insert(f.name.clone(), scheme);
+                            self.register_method_overload(&target_name, &f.name, scheme);
                         }
                     }
                 }
@@ -518,6 +537,7 @@ impl TypeChecker {
             }
             ast::Item::Forge(f) => {
                 let scheme = self.collect_forge_signature(f);
+                self.register_overload(f.name.clone(), scheme.clone());
                 self.define_scheme(f.name.clone(), scheme.clone());
                 if let Some(def_id) = self.span_to_def.read().unwrap().get(&f.name_span) {
                     self.def_types.insert(*def_id, scheme.ty.clone());
@@ -539,6 +559,9 @@ impl TypeChecker {
             }
 
             ast::Item::Shape(s) => {
+                let layout = self.extract_shape_layout(s);
+                self.shape_layouts.insert(s.name.clone(), layout);
+
                 self.push_scope();
                 let mut bounds = Vec::new();
                 for gp in &s.generic_params {
@@ -620,6 +643,83 @@ impl TypeChecker {
                 }
             }
         }
+    }
+
+    fn extract_shape_layout(&mut self, s: &ast::Shape) -> ShapeLayout {
+        let mut packed = false;
+        let mut align = None;
+
+        for attr in &s.attributes {
+            match attr.name.as_str() {
+                "packed" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid #[packed] usage: expected no arguments",
+                                s.name
+                            )));
+                        continue;
+                    }
+                    if packed {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' declares #[packed] more than once",
+                                s.name
+                            )));
+                    }
+                    packed = true;
+                }
+                "align" => {
+                    if attr.args.len() != 1 {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid #[align(..)] usage: expected exactly one integer argument",
+                                s.name
+                            )),
+                        );
+                        continue;
+                    }
+
+                    let parsed = match &attr.args[0] {
+                        ast::Expr::Literal(ast::Literal::Int(v)) => u32::try_from(*v).ok(),
+                        _ => None,
+                    };
+
+                    let Some(value) = parsed else {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "shape '{}' has invalid #[align(..)] value: expected integer literal",
+                            s.name
+                        )));
+                        continue;
+                    };
+
+                    if value == 0 || !value.is_power_of_two() {
+                        self.diagnostics.push(
+                            izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' has invalid alignment {}: alignment must be a non-zero power of two",
+                                s.name, value
+                            )),
+                        );
+                        continue;
+                    }
+
+                    if align.is_some() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "shape '{}' declares #[align(..)] more than once",
+                                s.name
+                            )));
+                        continue;
+                    }
+
+                    align = Some(value);
+                }
+                _ => {}
+            }
+        }
+
+        ShapeLayout { packed, align }
     }
 
     fn collect_forge_signature(&mut self, f: &ast::Forge) -> Scheme {
@@ -1367,40 +1467,15 @@ impl TypeChecker {
                 }
 
                 // Method resolution
-                let type_name = match &pruned {
-                    Type::Prim(p) => match p {
-                        PrimType::I8 => "i8".to_string(),
-                        PrimType::I16 => "i16".to_string(),
-                        PrimType::I32 => "i32".to_string(),
-                        PrimType::I64 => "i64".to_string(),
-                        PrimType::I128 => "i128".to_string(),
-                        PrimType::U8 => "u8".to_string(),
-                        PrimType::U16 => "u16".to_string(),
-                        PrimType::U32 => "u32".to_string(),
-                        PrimType::U64 => "u64".to_string(),
-                        PrimType::U128 => "u128".to_string(),
-                        PrimType::F32 => "f32".to_string(),
-                        PrimType::F64 => "f64".to_string(),
-                        PrimType::Bool => "bool".to_string(),
-                        PrimType::Str => "str".to_string(),
-                        _ => "".to_string(),
-                    },
-                    Type::Adt(_) => {
-                        // For now, we don't have a direct DefId -> Name map in TypeChecker
-                        // But we might be able to find it if we look at what was defined in env.
-                        // For simplicity, let's assume we can resolve it if we had the name.
-                        "".to_string()
-                    }
-                    _ => "".to_string(),
-                };
-
-                if !type_name.is_empty() {
-                    let scheme = self
+                if let Some(type_name) = self.method_target_name(&pruned) {
+                    let schemes = self
                         .method_env
                         .get(&type_name)
                         .and_then(|m| m.get(field).cloned());
-                    if let Some(s) = scheme {
-                        return self.instantiate(&s);
+                    if let Some(schemes) = schemes {
+                        if let Some(s) = schemes.first() {
+                            return self.instantiate(s);
+                        }
                     }
                 }
 
@@ -1418,39 +1493,50 @@ impl TypeChecker {
                         },
                     );
                 }
-                let ct = self.infer_expr(callee);
 
-                // Static verification of @requires at call-sites
+                let effective_arg_tys: Vec<Type> = effective_args
+                    .iter()
+                    .map(|arg| self.infer_expr(&arg.value))
+                    .collect();
+
                 if let ast::Expr::Ident(name, span) = callee.as_ref() {
-                    if let Some(scheme) = self.resolve_scheme(name) {
-                        if !scheme.requires.is_empty() {
-                            let mut eval_args = Vec::new();
-                            for arg in args {
-                                eval_args.push(::izel_parser::eval::eval_expr(
-                                    &arg.value,
-                                    &std::collections::HashMap::new(),
-                                ));
-                            }
-                            // Only check if all args are known constants
-                            if eval_args
-                                .iter()
-                                .all(|a| *a != ::izel_parser::eval::ConstValue::Unknown)
-                            {
-                                let diags = contracts::ContractChecker::check_requires_from_scheme(
-                                    name,
-                                    &scheme.param_names,
-                                    &scheme.requires,
-                                    &eval_args,
-                                    *span,
+                    if let Some((scheme, ty)) =
+                        self.select_function_overload(name, &effective_arg_tys, *span)
+                    {
+                        return self.apply_selected_call(
+                            callee,
+                            args,
+                            &effective_args,
+                            &scheme,
+                            &ty,
+                        );
+                    }
+                }
+
+                if let ast::Expr::Member(_, method, span) = callee.as_ref() {
+                    if let Some(receiver_ty) = effective_arg_tys.first() {
+                        if let Some(type_name) = self.method_target_name(receiver_ty) {
+                            if let Some((scheme, ty)) = self.select_method_overload(
+                                &type_name,
+                                method,
+                                &effective_arg_tys,
+                                *span,
+                            ) {
+                                return self.apply_selected_call(
+                                    callee,
+                                    args,
+                                    &effective_args,
+                                    &scheme,
+                                    &ty,
                                 );
-                                self.diagnostics.extend(diags);
                             }
                         }
                     }
                 }
 
+                let ct = self.infer_expr(callee);
                 if let Type::Function {
-                    params: mut_params,
+                    params,
                     ret,
                     effects,
                 } = self.prune(&ct)
@@ -1460,43 +1546,12 @@ impl TypeChecker {
                         self.accumulate_effects(&curr, &effects);
                     }
 
-                    // Build mapping from parameter names to argument expressions
-                    let mut mapping = std::collections::HashMap::new();
-                    if let Some(name) = if let ast::Expr::Ident(n, _) = callee.as_ref() {
-                        Some(n)
-                    } else {
-                        None
-                    } {
-                        if let Some(scheme) = self.resolve_scheme(name) {
-                            for (pname, arg) in scheme.param_names.iter().zip(effective_args.iter())
-                            {
-                                mapping.insert(pname.clone(), arg.value.clone());
-                            }
-                        }
+                    for (at, pty) in effective_arg_tys.iter().zip(params.iter()) {
+                        self.unify(pty, at);
                     }
 
-                    for (arg, pty) in effective_args.iter().zip(mut_params.iter()) {
-                        let at = self.infer_expr(&arg.value);
-                        // Substitute pty based on mapping
-                        let substituted_pty = if !mapping.is_empty() {
-                            self.substitute_type(pty, &mapping)
-                        } else {
-                            pty.clone()
-                        };
-
-                        self.unify(&substituted_pty, &at);
-                    }
-
-                    if !mapping.is_empty() {
-                        self.substitute_type(&ret, &mapping)
-                    } else {
-                        *ret
-                    }
+                    *ret
                 } else {
-                    for arg in args {
-                        self.infer_expr(&arg.value);
-                    }
-
                     self.new_var()
                 }
             }
@@ -1678,6 +1733,241 @@ impl TypeChecker {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn method_target_name(&self, ty: &Type) -> Option<String> {
+        match self.prune(ty) {
+            Type::Prim(p) => Some(
+                match p {
+                    PrimType::I8 => "i8",
+                    PrimType::I16 => "i16",
+                    PrimType::I32 => "i32",
+                    PrimType::I64 => "i64",
+                    PrimType::I128 => "i128",
+                    PrimType::U8 => "u8",
+                    PrimType::U16 => "u16",
+                    PrimType::U32 => "u32",
+                    PrimType::U64 => "u64",
+                    PrimType::U128 => "u128",
+                    PrimType::F32 => "f32",
+                    PrimType::F64 => "f64",
+                    PrimType::Bool => "bool",
+                    PrimType::Str => "str",
+                    _ => return None,
+                }
+                .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn select_function_overload(
+        &mut self,
+        name: &str,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let mut candidates = self.overload_env.get(name).cloned().unwrap_or_default();
+        if candidates.is_empty() {
+            if let Some(scheme) = self.resolve_scheme(name) {
+                candidates.push(scheme);
+            }
+        }
+
+        self.select_overload_candidates(name, candidates, arg_tys, span)
+    }
+
+    fn select_method_overload(
+        &mut self,
+        target: &str,
+        method: &str,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let candidates = self
+            .method_env
+            .get(target)
+            .and_then(|methods| methods.get(method))
+            .cloned()
+            .unwrap_or_default();
+
+        self.select_overload_candidates(method, candidates, arg_tys, span)
+    }
+
+    fn select_overload_candidates(
+        &mut self,
+        name: &str,
+        candidates: Vec<Scheme>,
+        arg_tys: &[Type],
+        span: Span,
+    ) -> Option<(Scheme, Type)> {
+        let mut ranked: Vec<(usize, Scheme, Type)> = Vec::new();
+
+        for scheme in candidates {
+            let instantiated = self.instantiate(&scheme);
+            if let Type::Function { params, .. } = self.prune(&instantiated) {
+                if params.len() != arg_tys.len() {
+                    continue;
+                }
+
+                if !params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .all(|(p, a)| self.type_compatible_for_overload(p, a))
+                {
+                    continue;
+                }
+
+                let score = params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .map(|(p, a)| self.overload_match_score(p, a))
+                    .sum();
+                ranked.push((score, scheme, instantiated));
+            }
+        }
+
+        if ranked.is_empty() {
+            return None;
+        }
+
+        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        if ranked.len() > 1 && ranked[0].0 == ranked[1].0 {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "Ambiguous call to '{}': multiple overloads match this argument list at {:?}",
+                    name, span
+                )));
+            return None;
+        }
+
+        let (_, scheme, ty) = ranked.remove(0);
+        Some((scheme, ty))
+    }
+
+    fn type_compatible_for_overload(&self, expected: &Type, actual: &Type) -> bool {
+        let expected = self.prune(expected);
+        let actual = self.prune(actual);
+
+        match (&expected, &actual) {
+            (Type::Var(_), _) | (_, Type::Var(_)) => true,
+            (Type::Error, _) | (_, Type::Error) => true,
+            (Type::Prim(e), Type::Prim(a)) => e == a,
+            (Type::Optional(e), Type::Optional(a))
+            | (Type::Cascade(e), Type::Cascade(a))
+            | (Type::Witness(e), Type::Witness(a)) => self.type_compatible_for_overload(e, a),
+            (Type::Optional(e), t) | (Type::Cascade(e), t) => {
+                self.type_compatible_for_overload(e, t)
+            }
+            (Type::Pointer(e, em, _), Type::Pointer(a, am, _)) => {
+                em == am && self.type_compatible_for_overload(e, a)
+            }
+            (Type::BuiltinWitness(k1, i1), Type::BuiltinWitness(k2, i2)) => {
+                k1 == k2 && self.type_compatible_for_overload(i1, i2)
+            }
+            (Type::Function { params: p1, .. }, Type::Function { params: p2, .. }) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(l, r)| self.type_compatible_for_overload(l, r))
+            }
+            (Type::Param(_), _) => true,
+            _ => expected == actual,
+        }
+    }
+
+    fn overload_match_score(&self, expected: &Type, actual: &Type) -> usize {
+        let expected = self.prune(expected);
+        let actual = self.prune(actual);
+        if expected == actual {
+            return 4;
+        }
+
+        match (&expected, &actual) {
+            (Type::Var(_), _) | (_, Type::Var(_)) | (Type::Param(_), _) => 1,
+            (Type::Optional(e), Type::Optional(a))
+            | (Type::Cascade(e), Type::Cascade(a))
+            | (Type::Witness(e), Type::Witness(a)) => self.overload_match_score(e, a),
+            (Type::Pointer(e, em, _), Type::Pointer(a, am, _)) if em == am => {
+                self.overload_match_score(e, a)
+            }
+            _ => 0,
+        }
+    }
+
+    fn apply_selected_call(
+        &mut self,
+        callee: &ast::Expr,
+        args: &[ast::Arg],
+        effective_args: &[ast::Arg],
+        selected_scheme: &Scheme,
+        selected_ty: &Type,
+    ) -> Type {
+        if let ast::Expr::Ident(name, span) = callee {
+            if !selected_scheme.requires.is_empty() {
+                let mut eval_args = Vec::new();
+                for arg in args {
+                    eval_args.push(::izel_parser::eval::eval_expr(
+                        &arg.value,
+                        &std::collections::HashMap::new(),
+                    ));
+                }
+
+                if eval_args
+                    .iter()
+                    .all(|a| *a != ::izel_parser::eval::ConstValue::Unknown)
+                {
+                    let diags = contracts::ContractChecker::check_requires_from_scheme(
+                        name,
+                        &selected_scheme.param_names,
+                        &selected_scheme.requires,
+                        &eval_args,
+                        *span,
+                    );
+                    self.diagnostics.extend(diags);
+                }
+            }
+        }
+
+        if let Type::Function {
+            params,
+            ret,
+            effects,
+        } = self.prune(selected_ty)
+        {
+            let current = self.current_effects.last().cloned();
+            if let Some(curr) = current {
+                self.accumulate_effects(&curr, &effects);
+            }
+
+            let mut mapping = std::collections::HashMap::new();
+            for (pname, arg) in selected_scheme
+                .param_names
+                .iter()
+                .zip(effective_args.iter())
+            {
+                mapping.insert(pname.clone(), arg.value.clone());
+            }
+
+            for (arg, pty) in effective_args.iter().zip(params.iter()) {
+                let at = self.infer_expr(&arg.value);
+                let substituted_pty = if mapping.is_empty() {
+                    pty.clone()
+                } else {
+                    self.substitute_type(pty, &mapping)
+                };
+                self.unify(&substituted_pty, &at);
+            }
+
+            if mapping.is_empty() {
+                *ret
+            } else {
+                self.substitute_type(&ret, &mapping)
+            }
+        } else {
+            self.new_var()
         }
     }
 
@@ -2571,6 +2861,157 @@ mod tests {
         assert!(
             tc.resolve_scheme("decode").is_some(),
             "Elaborated dual method 'decode' must be registered"
+        );
+    }
+
+    #[test]
+    fn test_shape_layout_extraction_for_packed_and_aligned() {
+        let source =
+            "#[packed] #[align(64)] shape RawHeader { magic: u32, version: u16, flags: u8, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        let layout = tc
+            .shape_layouts
+            .get("RawHeader")
+            .expect("shape layout metadata should exist");
+        assert!(layout.packed, "shape should be marked as packed");
+        assert_eq!(layout.align, Some(64), "shape alignment should be 64");
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid packed/align attributes should not emit diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_shape_layout_rejects_invalid_alignment() {
+        let source = "#[align(3)] shape BadAlign { value: u32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("alignment must be a non-zero power of two")),
+            "invalid alignment must produce a diagnostic"
+        );
+
+        let layout = tc
+            .shape_layouts
+            .get("BadAlign")
+            .expect("shape layout metadata should exist");
+        assert_eq!(
+            layout.align, None,
+            "invalid alignment should not be recorded"
+        );
+    }
+
+    #[test]
+    fn test_select_function_overload_prefers_exact_match() {
+        let mut tc = TypeChecker::new();
+
+        let i32_scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::I32)],
+                ret: Box::new(Type::Prim(PrimType::I32)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        let str_scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::Str)],
+                ret: Box::new(Type::Prim(PrimType::Str)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        tc.register_overload("id".to_string(), i32_scheme);
+        tc.register_overload("id".to_string(), str_scheme);
+
+        let selected = tc
+            .select_function_overload("id", &[Type::Prim(PrimType::I32)], izel_span::Span::dummy())
+            .expect("expected an overload to be selected");
+
+        if let Type::Function { ret, .. } = selected.1 {
+            assert_eq!(*ret, Type::Prim(PrimType::I32));
+        } else {
+            panic!("selected overload must be a function");
+        }
+    }
+
+    #[test]
+    fn test_select_function_overload_reports_ambiguity() {
+        let mut tc = TypeChecker::new();
+
+        let scheme = Scheme {
+            vars: vec![],
+            effect_vars: vec![],
+            names: vec![],
+            bounds: vec![],
+            ty: Type::Function {
+                params: vec![Type::Prim(PrimType::I32)],
+                ret: Box::new(Type::Prim(PrimType::I32)),
+                effects: EffectSet::Concrete(vec![Effect::Pure]),
+            },
+            param_names: vec!["x".to_string()],
+            requires: vec![],
+            ensures: vec![],
+            intrinsic: None,
+            visibility: ast::Visibility::Open,
+        };
+
+        tc.register_overload("dup".to_string(), scheme.clone());
+        tc.register_overload("dup".to_string(), scheme);
+
+        let selected = tc.select_function_overload(
+            "dup",
+            &[Type::Prim(PrimType::I32)],
+            izel_span::Span::dummy(),
+        );
+        assert!(
+            selected.is_none(),
+            "ambiguous overload should not be selected"
+        );
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("Ambiguous call to 'dup'")),
+            "ambiguity must produce a diagnostic"
         );
     }
 

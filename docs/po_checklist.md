@@ -40,13 +40,13 @@
 - [x] 7.4 Variadic Functions
 - [x] 7.5 `pure` Functions
 - [x] 7.6 Method Syntax (on shapes)
-- [ ] 7.7 Function Overloading
+- [x] 7.7 Function Overloading
 
 ## 8. Structures — `shape`
 - [x] 8.1 Basic Shape
 - [x] 8.2 Instantiation & Mutation
 - [x] 8.3 Tuple Shapes & Unit Shapes
-- [ ] 8.4 Packed & Aligned Shapes
+- [x] 8.4 Packed & Aligned Shapes
 - [x] 8.5 Visibility
 
 ## 9. Enumerations — `scroll`
