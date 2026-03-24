@@ -14,6 +14,7 @@ pub struct MirLowerer {
     /// Map from DefId to Local slot
     vars: HashMap<DefId, Local>,
     pub check_contracts: bool,
+    current_ensures: Vec<HirExpr>,
 }
 
 impl Default for MirLowerer {
@@ -34,11 +35,13 @@ impl MirLowerer {
             param_defs: Vec::new(),
             vars: HashMap::new(),
             check_contracts: false,
+            current_ensures: Vec::new(),
         }
     }
 
     pub fn lower_forge(&mut self, forge: &HirForge) -> MirBody {
         self.vars.clear();
+        self.current_ensures = forge.ensures.clone();
         self.body.arg_count = forge.params.len();
         self.forge_name = forge.name.clone();
         self.param_defs = forge.params.iter().map(|p| p.def_id).collect();
@@ -207,16 +210,15 @@ impl MirLowerer {
                     operands.push(self.rvalue_to_operand(rv));
                 }
 
-                // Emit runtime assertions for @requires
-                for req in requires {
-                    let req_rv = self.lower_expr(req);
-                    let req_op = self.rvalue_to_operand(req_rv);
-                    self.body.blocks[self.current_block]
-                        .instructions
-                        .push(Instruction::Assert(
-                            req_op,
-                            "precondition violation".to_string(),
-                        ));
+                // Emit runtime assertions for @requires when runtime checking is enabled.
+                if self.check_contracts {
+                    for req in requires {
+                        let req_rv = self.lower_expr(req);
+                        let req_op = self.rvalue_to_operand(req_rv);
+                        self.body.blocks[self.current_block].instructions.push(
+                            Instruction::Assert(req_op, "precondition violation".to_string()),
+                        );
+                    }
                 }
 
                 let callee_name = if let HirExpr::Ident(name, _, _, _) = &**callee {
@@ -278,6 +280,19 @@ impl MirLowerer {
                     }
                     let rv = self.lower_expr(e);
                     let op = self.rvalue_to_operand(rv);
+
+                    // Emit runtime assertions for @ensures on explicit returns.
+                    if self.check_contracts && !self.current_ensures.is_empty() {
+                        for ens in self.current_ensures.clone() {
+                            let substituted = self.substitute_result_expr(&ens, e);
+                            let ens_rv = self.lower_expr(&substituted);
+                            let ens_op = self.rvalue_to_operand(ens_rv);
+                            self.body.blocks[self.current_block].instructions.push(
+                                Instruction::Assert(ens_op, "postcondition violation".to_string()),
+                            );
+                        }
+                    }
+
                     self.body.blocks[self.current_block].terminator =
                         Some(Terminator::Return(Some(op)));
                     Rvalue::Use(Operand::Constant(Constant::Int(0))) // DUMMY
@@ -366,6 +381,35 @@ impl MirLowerer {
                     .push(Instruction::Assign(local, rvalue));
                 Operand::Move(local)
             }
+        }
+    }
+
+    fn substitute_result_expr(&self, expr: &HirExpr, result_expr: &HirExpr) -> HirExpr {
+        match expr {
+            HirExpr::Ident(name, _, _, _) if name == "result" => result_expr.clone(),
+            HirExpr::Binary(op, lhs, rhs, ty) => HirExpr::Binary(
+                op.clone(),
+                Box::new(self.substitute_result_expr(lhs, result_expr)),
+                Box::new(self.substitute_result_expr(rhs, result_expr)),
+                ty.clone(),
+            ),
+            HirExpr::Unary(op, inner, ty) => HirExpr::Unary(
+                op.clone(),
+                Box::new(self.substitute_result_expr(inner, result_expr)),
+                ty.clone(),
+            ),
+            HirExpr::Call(callee, args, requires, ret_ty) => HirExpr::Call(
+                Box::new(self.substitute_result_expr(callee, result_expr)),
+                args.iter()
+                    .map(|a| self.substitute_result_expr(a, result_expr))
+                    .collect(),
+                requires
+                    .iter()
+                    .map(|r| self.substitute_result_expr(r, result_expr))
+                    .collect(),
+                ret_ty.clone(),
+            ),
+            _ => expr.clone(),
         }
     }
 }
@@ -467,6 +511,7 @@ mod tests {
     #[test]
     fn test_contract_assertion_emission() {
         let mut lowerer = MirLowerer::new();
+        lowerer.check_contracts = true;
         let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
 
         // 1. Mock a call to 'f(n)' with @requires(n > 0)
@@ -517,6 +562,7 @@ mod tests {
     #[test]
     fn test_witness_typed_call_skips_runtime_assertions() {
         let mut lowerer = MirLowerer::new();
+        lowerer.check_contracts = true;
         let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
         let nz_ty = Type::BuiltinWitness(
             izel_typeck::type_system::BuiltinWitness::NonZero,
@@ -551,6 +597,103 @@ mod tests {
         assert!(
             !found_assert,
             "witness-typed call should not emit runtime contract asserts"
+        );
+    }
+
+    #[test]
+    fn test_contract_assertions_disabled_by_default() {
+        let mut lowerer = MirLowerer::new();
+        let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
+
+        let n_id = DefId(10);
+        let n_expr = HirExpr::Ident(
+            "n".to_string(),
+            n_id,
+            i32_ty.clone(),
+            izel_span::Span::dummy(),
+        );
+        let requires = vec![HirExpr::Binary(
+            izel_parser::ast::BinaryOp::Gt,
+            Box::new(n_expr.clone()),
+            Box::new(HirExpr::Literal(izel_parser::ast::Literal::Int(0))),
+            Type::Prim(PrimType::Bool),
+        )];
+        let callee = Box::new(HirExpr::Ident(
+            "f".to_string(),
+            DefId(20),
+            Type::Error,
+            izel_span::Span::dummy(),
+        ));
+        let call_expr = HirExpr::Call(callee, vec![n_expr], requires, i32_ty);
+
+        lowerer.lower_expr(&call_expr);
+
+        let mut found_assert = false;
+        for node in lowerer.body.blocks.node_indices() {
+            for inst in &lowerer.body.blocks[node].instructions {
+                if let Instruction::Assert(_, _) = inst {
+                    found_assert = true;
+                }
+            }
+        }
+        assert!(
+            !found_assert,
+            "runtime contract asserts must be disabled unless check_contracts is enabled"
+        );
+    }
+
+    #[test]
+    fn test_postcondition_assertion_emission() {
+        let mut lowerer = MirLowerer::new();
+        lowerer.check_contracts = true;
+
+        let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
+        let ensure = HirExpr::Binary(
+            izel_parser::ast::BinaryOp::Gt,
+            Box::new(HirExpr::Ident(
+                "result".to_string(),
+                DefId(1000),
+                i32_ty.clone(),
+                izel_span::Span::dummy(),
+            )),
+            Box::new(HirExpr::Literal(izel_parser::ast::Literal::Int(0))),
+            Type::Prim(PrimType::Bool),
+        );
+
+        let forge = HirForge {
+            name: "ensured".into(),
+            name_span: Span::dummy(),
+            def_id: DefId(0),
+            params: vec![],
+            ret_type: i32_ty,
+            attributes: vec![],
+            body: Some(HirBlock {
+                stmts: vec![],
+                expr: Some(Box::new(HirExpr::Return(Some(Box::new(HirExpr::Literal(
+                    izel_parser::ast::Literal::Int(1),
+                )))))),
+                span: Span::dummy(),
+            }),
+            requires: vec![],
+            ensures: vec![ensure],
+            span: Span::dummy(),
+        };
+
+        let mir = lowerer.lower_forge(&forge);
+        let mut found_post_assert = false;
+        for node in mir.blocks.node_indices() {
+            for inst in &mir.blocks[node].instructions {
+                if let Instruction::Assert(_, msg) = inst {
+                    if msg == "postcondition violation" {
+                        found_post_assert = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            found_post_assert,
+            "MIR should contain an Assert instruction for @ensures when runtime checks are enabled"
         );
     }
 

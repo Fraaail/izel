@@ -99,7 +99,7 @@
 - [x] 18.3 Custom Witnesses
 
 ## 19. Temporal Constraints
-- [ ] Verification and Enforcement of Constraints
+- [x] Verification and Enforcement of Constraints
 
 ## 20. Memory Zones
 - [ ] Zones syntax and lifetimes
