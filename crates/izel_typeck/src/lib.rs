@@ -42,6 +42,10 @@ pub struct TypeChecker {
     pub shape_layouts: FxHashMap<String, ShapeLayout>,
     pub custom_error_types: std::collections::HashSet<String>,
     pub derived_weaves: FxHashMap<String, std::collections::HashSet<String>>,
+    pub test_forges: std::collections::HashSet<String>,
+    pub bench_forges: std::collections::HashSet<String>,
+    pub inline_forges: FxHashMap<String, Option<String>>,
+    pub deprecated_forges: FxHashMap<String, Vec<String>>,
     pub effect_boundaries: FxHashMap<String, Vec<Effect>>,
     zone_scope_depth: usize,
     pub method_env: FxHashMap<String, FxHashMap<String, Vec<Scheme>>>,
@@ -83,6 +87,10 @@ impl TypeChecker {
             shape_layouts: FxHashMap::default(),
             custom_error_types: std::collections::HashSet::default(),
             derived_weaves: FxHashMap::default(),
+            test_forges: std::collections::HashSet::default(),
+            bench_forges: std::collections::HashSet::default(),
+            inline_forges: FxHashMap::default(),
+            deprecated_forges: FxHashMap::default(),
             effect_boundaries: FxHashMap::default(),
             zone_scope_depth: 0,
             method_env: FxHashMap::default(),
@@ -420,6 +428,118 @@ impl TypeChecker {
         )
     }
 
+    fn is_attribute_macro(name: &str) -> bool {
+        matches!(name, "test" | "bench" | "inline" | "deprecated")
+    }
+
+    fn validate_forge_attribute_macros(&mut self, f: &ast::Forge) {
+        let mut has_test = false;
+        let mut has_bench = false;
+
+        for attr in &f.attributes {
+            match attr.name.as_str() {
+                "test" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "forge '{}' has invalid #[test] usage: expected no arguments",
+                                f.name
+                            )));
+                    }
+                    has_test = true;
+                    self.test_forges.insert(f.name.clone());
+                }
+                "bench" => {
+                    if !attr.args.is_empty() {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "forge '{}' has invalid #[bench] usage: expected no arguments",
+                                f.name
+                            )));
+                    }
+                    has_bench = true;
+                    self.bench_forges.insert(f.name.clone());
+                }
+                "inline" => {
+                    if attr.args.len() > 1 {
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                            "forge '{}' has invalid #[inline] usage: expected zero or one argument",
+                            f.name
+                        )));
+                        continue;
+                    }
+
+                    let mode = if let Some(arg) = attr.args.first() {
+                        match arg {
+                            ast::Expr::Ident(name, _) => Some(name.clone()),
+                            ast::Expr::Path(parts, _) if !parts.is_empty() => parts.last().cloned(),
+                            _ => {
+                                self.diagnostics.push(
+                                    izel_diagnostics::Diagnostic::error().with_message(format!(
+                                        "forge '{}' has invalid #[inline] argument",
+                                        f.name
+                                    )),
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(m) = mode.as_deref() {
+                        if m != "always" && m != "never" {
+                            self.diagnostics.push(
+                                izel_diagnostics::Diagnostic::error().with_message(format!(
+                                    "forge '{}' has invalid #[inline] mode '{}': expected always or never",
+                                    f.name, m
+                                )),
+                            );
+                        }
+                    }
+
+                    self.inline_forges.insert(f.name.clone(), mode);
+                }
+                "deprecated" => {
+                    let mut notes = Vec::new();
+                    for arg in &attr.args {
+                        match arg {
+                            ast::Expr::Literal(ast::Literal::Str(s)) => notes.push(s.clone()),
+                            ast::Expr::Ident(name, _) => notes.push(name.clone()),
+                            ast::Expr::Path(parts, _) if !parts.is_empty() => {
+                                notes.push(parts.join("::"))
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.deprecated_forges.insert(f.name.clone(), notes);
+                }
+                _ => {}
+            }
+        }
+
+        if has_test && has_bench {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "forge '{}' cannot use #[test] and #[bench] together",
+                    f.name
+                )));
+        }
+    }
+
+    fn validate_non_forge_attribute_macros(&mut self, attrs: &[ast::Attribute], target: &str) {
+        for attr in attrs {
+            if Self::is_attribute_macro(&attr.name) {
+                self.diagnostics
+                    .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "attribute macro #[{}] can only be applied to forge declarations, found on {}",
+                    attr.name, target
+                )));
+            }
+        }
+    }
+
     fn check_echo(&mut self, e: &ast::Echo) {
         let body_effects = self.new_effect_var();
         self.current_effects.push(body_effects.clone());
@@ -641,6 +761,7 @@ impl TypeChecker {
     fn collect_item_signature(&mut self, item: &ast::Item) {
         match item {
             ast::Item::Weave(w) => {
+                self.validate_non_forge_attribute_macros(&w.attributes, "weave");
                 if self.has_error_attr(&w.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -652,6 +773,7 @@ impl TypeChecker {
                 self.define(w.name.clone(), Type::Prim(PrimType::Void));
             }
             ast::Item::Impl(i) => {
+                self.validate_non_forge_attribute_macros(&i.attributes, "impl block");
                 if self.has_error_attr(&i.attributes) {
                     self.diagnostics.push(
                         izel_diagnostics::Diagnostic::error().with_message(
@@ -720,6 +842,7 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Ward(w) => {
+                self.validate_non_forge_attribute_macros(&w.attributes, "ward");
                 if self.has_error_attr(&w.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -732,6 +855,7 @@ impl TypeChecker {
                 }
             }
             ast::Item::Static(st) => {
+                self.validate_non_forge_attribute_macros(&st.attributes, "static");
                 if self.has_error_attr(&st.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -755,6 +879,8 @@ impl TypeChecker {
                         f.name
                     )));
                 }
+
+                self.validate_forge_attribute_macros(f);
 
                 let boundary_effects = self.parse_effect_boundary_attr(&f.attributes, &f.name);
                 if !boundary_effects.is_empty() {
@@ -785,6 +911,7 @@ impl TypeChecker {
             }
 
             ast::Item::Shape(s) => {
+                self.validate_non_forge_attribute_macros(&s.attributes, "shape");
                 if self.has_error_attr(&s.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -823,6 +950,7 @@ impl TypeChecker {
                 }
             }
             ast::Item::Dual(d) => {
+                self.validate_non_forge_attribute_macros(&d.attributes, "dual");
                 if self.has_error_attr(&d.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -857,6 +985,7 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Alias(a) => {
+                self.validate_non_forge_attribute_macros(&a.attributes, "alias");
                 if self.has_error_attr(&a.attributes) {
                     self.diagnostics
                         .push(izel_diagnostics::Diagnostic::error().with_message(format!(
@@ -873,6 +1002,7 @@ impl TypeChecker {
                 }
             }
             ast::Item::Scroll(s) => {
+                self.validate_non_forge_attribute_macros(&s.attributes, "scroll");
                 let has_error_attr = self.has_error_attr(&s.attributes);
                 if has_error_attr {
                     self.custom_error_types.insert(s.name.clone());
@@ -886,6 +1016,7 @@ impl TypeChecker {
                 }
             }
             ast::Item::Echo(e) => {
+                self.validate_non_forge_attribute_macros(&e.attributes, "echo block");
                 if self.has_error_attr(&e.attributes) {
                     self.diagnostics.push(
                         izel_diagnostics::Diagnostic::error().with_message(
@@ -897,6 +1028,7 @@ impl TypeChecker {
             }
             ast::Item::Macro(_) => {}
             ast::Item::Bridge(b) => {
+                self.validate_non_forge_attribute_macros(&b.attributes, "bridge block");
                 if self.has_error_attr(&b.attributes) {
                     self.diagnostics.push(
                         izel_diagnostics::Diagnostic::error().with_message(
@@ -3991,6 +4123,94 @@ mod tests {
                 .iter()
                 .any(|d| d.message.contains("expected at least one effect name")),
             "missing effect_boundary arguments must produce diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_test_registration() {
+        let source = "#[test] forge test_add() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            tc.diagnostics
+        );
+        assert!(tc.test_forges.contains("test_add"));
+    }
+
+    #[test]
+    fn test_attribute_macro_test_rejects_args() {
+        let source = "#[test(1)] forge test_add() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("invalid #[test] usage")),
+            "#[test] with args should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_rejected_on_shape() {
+        let source = "#[inline(always)] shape S { x: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("can only be applied to forge declarations")),
+            "attribute macro on non-forge should produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_attribute_macro_test_and_bench_conflict() {
+        let source = "#[test] #[bench] forge t() { give }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("cannot use #[test] and #[bench] together")),
+            "#[test] and #[bench] conflict should produce a diagnostic"
         );
     }
 
