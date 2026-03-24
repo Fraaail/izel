@@ -81,7 +81,7 @@
 - [x] 15.1 Result<T, E> and Error Propagation
 - [x] 15.2 The `!` Cascade Propagator
 - [x] 15.3 `seek` / `catch` — Inline Handling
-- [ ] 15.4 Custom Error Types
+- [x] 15.4 Custom Error Types
 
 ## 16. Generics & Parametric Polymorphism
 - [x] Generic Types and Implementation

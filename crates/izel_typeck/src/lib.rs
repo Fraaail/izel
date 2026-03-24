@@ -40,6 +40,7 @@ pub struct TypeChecker {
     pub diagnostics: Vec<izel_diagnostics::Diagnostic>,
     pub shape_invariants: FxHashMap<String, Vec<ast::Expr>>,
     pub shape_layouts: FxHashMap<String, ShapeLayout>,
+    pub custom_error_types: std::collections::HashSet<String>,
     pub method_env: FxHashMap<String, FxHashMap<String, Vec<Scheme>>>,
     pub current_self: Option<Type>,
     pub in_flow_context: bool,
@@ -77,6 +78,7 @@ impl TypeChecker {
             diagnostics: Vec::new(),
             shape_invariants: FxHashMap::default(),
             shape_layouts: FxHashMap::default(),
+            custom_error_types: std::collections::HashSet::default(),
             method_env: FxHashMap::default(),
             current_self: None,
             in_flow_context: false,
@@ -458,10 +460,25 @@ impl TypeChecker {
     fn collect_item_signature(&mut self, item: &ast::Item) {
         match item {
             ast::Item::Weave(w) => {
+                if self.has_error_attr(&w.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on weave '{}'",
+                        w.name
+                    )));
+                }
                 self.weaves.insert(w.name.clone(), w.clone());
                 self.define(w.name.clone(), Type::Prim(PrimType::Void));
             }
             ast::Item::Impl(i) => {
+                if self.has_error_attr(&i.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on impl block"
+                                .to_string(),
+                        ),
+                    );
+                }
                 let target = self.lower_ast_type(&i.target);
                 let old_self = self.current_self.clone();
                 self.current_self = Some(target.clone());
@@ -522,11 +539,25 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Ward(w) => {
+                if self.has_error_attr(&w.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on ward '{}'",
+                        w.name
+                    )));
+                }
                 for it in &w.items {
                     self.collect_item_signature(it);
                 }
             }
             ast::Item::Static(st) => {
+                if self.has_error_attr(&st.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on static '{}'",
+                        st.name
+                    )));
+                }
                 let ty = self.lower_ast_type(&st.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = st.visibility.clone();
@@ -536,6 +567,13 @@ impl TypeChecker {
                 }
             }
             ast::Item::Forge(f) => {
+                if self.has_error_attr(&f.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on forge '{}'",
+                        f.name
+                    )));
+                }
                 let scheme = self.collect_forge_signature(f);
                 self.register_overload(f.name.clone(), scheme.clone());
                 self.define_scheme(f.name.clone(), scheme.clone());
@@ -559,6 +597,13 @@ impl TypeChecker {
             }
 
             ast::Item::Shape(s) => {
+                if self.has_error_attr(&s.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on shape '{}'",
+                        s.name
+                    )));
+                }
                 let layout = self.extract_shape_layout(s);
                 self.shape_layouts.insert(s.name.clone(), layout);
 
@@ -589,6 +634,13 @@ impl TypeChecker {
                 }
             }
             ast::Item::Dual(d) => {
+                if self.has_error_attr(&d.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on dual '{}'",
+                        d.name
+                    )));
+                }
                 self.push_scope();
                 let mut bounds = Vec::new();
                 for gp in &d.generic_params {
@@ -616,6 +668,13 @@ impl TypeChecker {
                 self.current_self = old_self;
             }
             ast::Item::Alias(a) => {
+                if self.has_error_attr(&a.attributes) {
+                    self.diagnostics
+                        .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                        "#[error] can only be applied to scroll declarations, found on alias '{}'",
+                        a.name
+                    )));
+                }
                 let ty = self.lower_ast_type(&a.ty);
                 let mut scheme = self.generalize(&ty);
                 scheme.visibility = a.visibility.clone();
@@ -625,6 +684,11 @@ impl TypeChecker {
                 }
             }
             ast::Item::Scroll(s) => {
+                let has_error_attr = self.has_error_attr(&s.attributes);
+                if has_error_attr {
+                    self.custom_error_types.insert(s.name.clone());
+                }
+
                 let mut scheme = self.generalize(&Type::Adt(DefId(0)));
                 scheme.visibility = s.visibility.clone();
                 self.define_scheme(s.name.clone(), scheme.clone());
@@ -633,16 +697,36 @@ impl TypeChecker {
                 }
             }
             ast::Item::Echo(e) => {
+                if self.has_error_attr(&e.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on echo block"
+                                .to_string(),
+                        ),
+                    );
+                }
                 // Compile-time execution stub
                 self.check_block(&e.body);
             }
             ast::Item::Bridge(b) => {
+                if self.has_error_attr(&b.attributes) {
+                    self.diagnostics.push(
+                        izel_diagnostics::Diagnostic::error().with_message(
+                            "#[error] can only be applied to scroll declarations, found on bridge block"
+                                .to_string(),
+                        ),
+                    );
+                }
                 // ABI-specific registration stub
                 for it in &b.items {
                     self.collect_item_signature(it);
                 }
             }
         }
+    }
+
+    fn has_error_attr(&self, attrs: &[ast::Attribute]) -> bool {
+        attrs.iter().any(|a| a.name == "error")
     }
 
     fn extract_shape_layout(&mut self, s: &ast::Shape) -> ShapeLayout {
@@ -2919,6 +3003,52 @@ mod tests {
         assert_eq!(
             layout.align, None,
             "invalid alignment should not be recorded"
+        );
+    }
+
+    #[test]
+    fn test_custom_error_scroll_registration() {
+        let source = "#[error] scroll AppError { NotFound }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.custom_error_types.contains("AppError"),
+            "#[error] scroll should be tracked as a custom error type"
+        );
+        assert!(
+            tc.diagnostics.is_empty(),
+            "valid custom error type declaration should not emit diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_error_attr_rejected_on_non_scroll() {
+        let source = "#[error] shape InvalidErrorAttr { code: i32, }";
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+        let module = ast::Module { items };
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&module);
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("#[error] can only be applied to scroll declarations")),
+            "#[error] on non-scroll declarations must produce a diagnostic"
         );
     }
 
