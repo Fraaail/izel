@@ -161,7 +161,7 @@
 ## 31. Standard Library
 - [x] Core (no `!alloc` needed)
 - [x] Allocation & Collections
-- [ ] I/O & OS
+- [x] I/O & OS
 - [ ] Concurrency
 - [ ] Math, Hash, Codec
 - [ ] Testing

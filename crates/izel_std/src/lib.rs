@@ -239,4 +239,53 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn std_io_os_exposes_surface() {
+        let checks: [(&str, &[&str]); 6] = [
+            (
+                "io.iz",
+                &[
+                    "forge println",
+                    "forge eprintln",
+                    "forge stdin",
+                    "forge stdout",
+                    "forge stderr",
+                    "weave Read",
+                    "weave Write",
+                    "weave Seek",
+                ],
+            ),
+            (
+                "fs.iz",
+                &[
+                    "forge read_to_string",
+                    "forge write",
+                    "forge copy",
+                    "forge create_dir",
+                    "shape DirEntry",
+                ],
+            ),
+            ("path.iz", &["shape Path", "shape PathBuf"]),
+            ("env.iz", &["forge args", "forge vars", "forge current_dir"]),
+            ("os.iz", &["OS-specific extensions"]),
+            ("ffi.iz", &["shape CStr", "shape CString"]),
+        ];
+
+        for (file_name, required) in checks {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../library/std/{}", file_name));
+            let src = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+
+            for symbol in required {
+                assert!(
+                    src.contains(symbol),
+                    "missing std::{} declaration: {}",
+                    file_name,
+                    symbol
+                );
+            }
+        }
+    }
 }

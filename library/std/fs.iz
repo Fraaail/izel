@@ -1,0 +1,10 @@
+// library/std/fs.iz
+
+shape DirEntry {
+    path: str,
+}
+
+forge read_to_string(path: str) -> Result<str, ()>
+forge write(path: str, contents: str) -> Result<void, ()>
+forge copy(src: str, dst: str) -> Result<u64, ()>
+forge create_dir(path: str) -> Result<void, ()>
