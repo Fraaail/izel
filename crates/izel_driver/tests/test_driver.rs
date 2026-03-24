@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-#[test]
-fn test_custom_iterator_typechecks() {
-    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/custom_iterator.iz");
+fn assert_fixture_typechecks(path: &str) {
+    let input = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
     let source = fs::read_to_string(&input).expect("failed to read fixture source");
 
     let source_id = izel_span::SourceId(0);
@@ -46,7 +45,18 @@ fn test_custom_iterator_typechecks() {
 
     assert!(
         typeck.diagnostics.is_empty(),
-        "custom iterator fixture must typecheck cleanly, diagnostics: {:?}",
+        "fixture '{}' must typecheck cleanly, diagnostics: {:?}",
+        path,
         typeck.diagnostics
     );
+}
+
+#[test]
+fn test_custom_iterator_typechecks() {
+    assert_fixture_typechecks("tests/fixtures/custom_iterator.iz");
+}
+
+#[test]
+fn test_custom_witness_typechecks() {
+    assert_fixture_typechecks("tests/fixtures/custom_witness.iz");
 }

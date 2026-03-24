@@ -2763,6 +2763,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_custom_witness_shape_predicate_typechecks() {
+        let source = r#"
+            shape IsPositive {
+            }
+
+            @proof forge prove_positive(n: i32) -> Witness<IsPositive> {
+                Witness::<IsPositive>::new()
+            }
+
+            forge sqrt_positive(n: i32, _proof: Witness<IsPositive>) -> f64 {
+                give 0.0
+            }
+
+            forge main() {
+                let proof = prove_positive(5)
+                let _v = sqrt_positive(5, proof)
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics.is_empty(),
+            "custom witness flow should typecheck cleanly, diagnostics: {:?}",
+            tc.diagnostics
+        );
+    }
+
+    #[test]
+    fn test_custom_witness_new_outside_proof_is_rejected() {
+        let mut tc = TypeChecker::new();
+        tc.current_attributes = vec![];
+        tc.in_raw_block = false;
+
+        let _ = tc.infer_expr(&ast::Expr::WitnessNew(Box::new(ast::GenericArg::Type(
+            ast::Type::Prim("IsPositive".to_string()),
+        ))));
+
+        assert!(
+            tc.diagnostics.iter().any(|d| d
+                .message
+                .contains("only allowed in raw blocks or proof-verified contexts")),
+            "custom witness construction outside proof/raw must produce a diagnostic"
+        );
+    }
+
     // ========== Built-in Witness Types Tests ==========
 
     #[test]

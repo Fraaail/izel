@@ -96,7 +96,7 @@
 ## 18. Witness Types
 - [x] 18.1 Built-in Witnesses
 - [x] 18.2 Using Witnesses to Eliminate Runtime Checks
-- [ ] 18.3 Custom Witnesses
+- [x] 18.3 Custom Witnesses
 
 ## 19. Temporal Constraints
 - [ ] Verification and Enforcement of Constraints
