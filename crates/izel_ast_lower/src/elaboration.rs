@@ -188,9 +188,16 @@ fn derive_decode_from_shape(shape: &ast::Shape) -> ast::Forge {
 fn generate_roundtrip_test(
     shape_name: &str,
     encode: &ast::Forge,
-    _decode: &ast::Forge,
+    decode: &ast::Forge,
 ) -> ast::Item {
     let span = encode.span;
+    let mut effects = encode.effects.clone();
+    for eff in &decode.effects {
+        if !effects.contains(eff) {
+            effects.push(eff.clone());
+        }
+    }
+
     ast::Item::Forge(ast::Forge {
         name: format!("{}_test", shape_name),
         name_span: span,
@@ -199,7 +206,7 @@ fn generate_roundtrip_test(
         generic_params: encode.generic_params.clone(),
         params: vec![],
         ret_type: ast::Type::Prim("void".into()),
-        effects: encode.effects.clone(),
+        effects,
         attributes: vec![ast::Attribute {
             name: "test".into(),
             args: vec![],

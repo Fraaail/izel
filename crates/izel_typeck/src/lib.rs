@@ -277,7 +277,6 @@ impl TypeChecker {
                 self.check_forge(f);
             }
             ast::Item::Impl(i) => {
-                dbg!(&i.target);
                 let old_self = self.current_self.clone();
                 self.current_self = Some(self.lower_ast_type(&i.target));
                 self.check_impl(i);
@@ -321,6 +320,15 @@ impl TypeChecker {
                     decode_fn = Some(f);
                 }
             }
+        }
+
+        if encode_fn.is_none() || decode_fn.is_none() {
+            self.diagnostics
+                .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                    "dual '{}' must define or elaborate both encode and decode forges",
+                    d.name
+                )));
+            return;
         }
 
         if let (Some(encode), Some(decode)) = (encode_fn, decode_fn) {

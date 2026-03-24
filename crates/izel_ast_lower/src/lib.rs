@@ -1936,6 +1936,8 @@ impl<'a> Lowerer<'a> {
 mod tests {
     use super::*;
     use izel_lexer::{Lexer, Token, TokenKind};
+    use izel_parser::Parser;
+    use izel_span::SourceId;
 
     fn tokenize(source: &str) -> Vec<Token> {
         let mut lexer = Lexer::new(source, izel_span::SourceId(0));
@@ -2110,5 +2112,125 @@ mod tests {
         } else {
             panic!("Expected Dual item");
         }
+    }
+
+    #[test]
+    fn test_lower_dual_decl_generates_missing_encode_from_decode() {
+        let source =
+            "dual shape JsonFormat<T> { forge decode(&self, raw: JsonValue) -> T { raw } }";
+
+        let source_id = SourceId(0);
+        let mut lexer = Lexer::new(source, source_id);
+        let mut tokens = Vec::new();
+
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+
+        if let ast::Item::Dual(d) = &items[0] {
+            let mut found_encode = false;
+            let mut found_decode = false;
+
+            for it in &d.items {
+                if let ast::Item::Forge(f) = it {
+                    if f.name == "encode" {
+                        found_encode = true;
+                    }
+                    if f.name == "decode" {
+                        found_decode = true;
+                    }
+                }
+            }
+
+            assert!(
+                found_encode && found_decode,
+                "Both encode and decode should be present after elaboration"
+            );
+        } else {
+            panic!("Expected a Dual item");
+        }
+    }
+
+    #[test]
+    fn test_lower_dual_effectful_generates_roundtrip_test_item() {
+        let source = "dual shape JsonFormat<T> { forge encode(&self, val: &T) !io { val } forge decode(&self, raw: JsonValue) !net { raw } }";
+
+        let source_id = SourceId(0);
+        let mut lexer = Lexer::new(source, source_id);
+        let mut tokens = Vec::new();
+
+        loop {
+            let t = lexer.next_token();
+            if t.kind == TokenKind::Eof {
+                tokens.push(t);
+                break;
+            }
+            tokens.push(t);
+        }
+
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_decl();
+        let lowerer = Lowerer::new(source);
+        let items = lowerer.lower_item(&cst);
+
+        assert_eq!(
+            items.len(),
+            2,
+            "effectful dual should also generate a test item"
+        );
+
+        let mut expected_effects = Vec::new();
+        for item in &items {
+            if let ast::Item::Dual(d) = item {
+                for inner in &d.items {
+                    if let ast::Item::Forge(f) = inner {
+                        if f.name == "encode" || f.name == "decode" {
+                            for eff in &f.effects {
+                                if !expected_effects.contains(eff) {
+                                    expected_effects.push(eff.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut has_test = false;
+        for item in items {
+            if let ast::Item::Forge(f) = item {
+                if f.name.ends_with("_test") {
+                    has_test = f.attributes.iter().any(|a| a.name == "test");
+                    for eff in &expected_effects {
+                        assert!(
+                            f.effects.contains(eff),
+                            "generated roundtrip test missing expected effect: {}",
+                            eff
+                        );
+                    }
+                    assert!(
+                        f.effects.len() >= expected_effects.len(),
+                        "generated roundtrip test should include effects from encode/decode"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            has_test,
+            "expected generated #[test] forge for effectful dual"
+        );
     }
 }

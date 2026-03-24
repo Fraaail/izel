@@ -105,7 +105,7 @@
 - [x] Zones syntax and lifetimes
 
 ## 21. Duality Types
-- [ ] Dual shapes parsing and elaboration
+- [x] Dual shapes parsing and elaboration
 
 ## 22. Compile-Time Evaluation — `echo`
 - [ ] Implementation of `echo` nodes
