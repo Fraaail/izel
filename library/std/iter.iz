@@ -103,3 +103,453 @@ forge fold<I, B, F>(~iter: I, init: B, f: F) -> B
     }
     accum
 }
+
+// ---------------------------------------------------------
+// FILTER_MAP
+// ---------------------------------------------------------
+
+shape FilterMap<I, F> {
+    ~iter: I
+    f: F
+}
+
+impl<I, F, B> Iterator for FilterMap<I, F>
+  where I: Iterator, F: FnMut(I::Item) -> ?B
+{
+    type Item = B
+
+    forge next(&~self) -> ?B {
+        loop {
+            let x = self.iter.next()?
+            let y = (self.f)(x)
+            given y is Some {
+                give y
+            }
+        }
+    }
+}
+
+forge filter_map<I, F>(iter: I, f: F) -> FilterMap<I, F> {
+    FilterMap { iter, f }
+}
+
+// ---------------------------------------------------------
+// FLAT_MAP / FLATTEN
+// ---------------------------------------------------------
+
+shape FlatMap<I, F, U> {
+    ~iter: I
+    f: F
+    ~current: ?U
+}
+
+impl<I, F, U> Iterator for FlatMap<I, F, U>
+  where I: Iterator, U: Iterator, F: FnMut(I::Item) -> U
+{
+    type Item = U::Item
+
+    forge next(&~self) -> ?U::Item {
+        loop {
+            given self.current is Some {
+                let v = self.current?.next()
+                given v is Some {
+                    give v
+                }
+            }
+
+            let outer = self.iter.next()?
+            self.current = Some((self.f)(outer))
+        }
+    }
+}
+
+forge flat_map<I, F, U>(iter: I, f: F) -> FlatMap<I, F, U> {
+    FlatMap { iter, f, current: None }
+}
+
+forge flatten<I, U>(iter: I) -> FlatMap<I, bind(I::Item) -> U, U>
+  where I: Iterator, U: Iterator, I::Item == U
+{
+    flat_map(iter, bind |x| x)
+}
+
+// ---------------------------------------------------------
+// SCAN
+// ---------------------------------------------------------
+
+shape Scan<I, S, F> {
+    ~iter: I
+    ~state: S
+    f: F
+}
+
+impl<I, S, F, B> Iterator for Scan<I, S, F>
+  where I: Iterator, F: FnMut(&~S, I::Item) -> ?B
+{
+    type Item = B
+
+    forge next(&~self) -> ?B {
+        let x = self.iter.next()?
+        (self.f)(&~self.state, x)
+    }
+}
+
+forge scan<I, S, F>(iter: I, state: S, f: F) -> Scan<I, S, F> {
+    Scan { iter, state, f }
+}
+
+// ---------------------------------------------------------
+// SKIP / TAKE_WHILE / SKIP_WHILE
+// ---------------------------------------------------------
+
+shape Skip<I> {
+    ~iter: I
+    ~remaining: usize
+}
+
+impl<I> Iterator for Skip<I>
+  where I: Iterator
+{
+    type Item = I::Item
+
+    forge next(&~self) -> ?I::Item {
+        while self.remaining > 0 {
+            self.iter.next()?
+            self.remaining = self.remaining - 1
+        }
+        self.iter.next()
+    }
+}
+
+forge skip<I>(iter: I, n: usize) -> Skip<I> {
+    Skip { iter, remaining: n }
+}
+
+shape TakeWhile<I, P> {
+    ~iter: I
+    pred: P
+    ~done: bool
+}
+
+impl<I, P> Iterator for TakeWhile<I, P>
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    type Item = I::Item
+
+    forge next(&~self) -> ?I::Item {
+        given self.done {
+            give None
+        }
+        let x = self.iter.next()?
+        given (self.pred)(&x) {
+            give Some(x)
+        }
+        self.done = true
+        None
+    }
+}
+
+forge take_while<I, P>(iter: I, pred: P) -> TakeWhile<I, P> {
+    TakeWhile { iter, pred, done: false }
+}
+
+shape SkipWhile<I, P> {
+    ~iter: I
+    pred: P
+    ~skipping: bool
+}
+
+impl<I, P> Iterator for SkipWhile<I, P>
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    type Item = I::Item
+
+    forge next(&~self) -> ?I::Item {
+        loop {
+            let x = self.iter.next()?
+            given self.skipping and (self.pred)(&x) {
+                next
+            }
+            self.skipping = false
+            give Some(x)
+        }
+    }
+}
+
+forge skip_while<I, P>(iter: I, pred: P) -> SkipWhile<I, P> {
+    SkipWhile { iter, pred, skipping: true }
+}
+
+// ---------------------------------------------------------
+// ZIP / ENUMERATE / CHAIN
+// ---------------------------------------------------------
+
+shape Zip<A, B> {
+    ~a: A
+    ~b: B
+}
+
+impl<A, B> Iterator for Zip<A, B>
+  where A: Iterator, B: Iterator
+{
+    type Item = (A::Item, B::Item)
+
+    forge next(&~self) -> ?(A::Item, B::Item) {
+        let x = self.a.next()?
+        let y = self.b.next()?
+        Some((x, y))
+    }
+}
+
+forge zip<A, B>(a: A, b: B) -> Zip<A, B> {
+    Zip { a, b }
+}
+
+shape Enumerate<I> {
+    ~iter: I
+    ~index: usize
+}
+
+impl<I> Iterator for Enumerate<I>
+  where I: Iterator
+{
+    type Item = (usize, I::Item)
+
+    forge next(&~self) -> ?(usize, I::Item) {
+        let x = self.iter.next()?
+        let i = self.index
+        self.index = self.index + 1
+        Some((i, x))
+    }
+}
+
+forge enumerate<I>(iter: I) -> Enumerate<I> {
+    Enumerate { iter, index: 0 }
+}
+
+shape Chain<A, B> {
+    ~left: A
+    ~right: B
+    ~using_left: bool
+}
+
+impl<A, B> Iterator for Chain<A, B>
+  where A: Iterator, B: Iterator, A::Item == B::Item
+{
+    type Item = A::Item
+
+    forge next(&~self) -> ?A::Item {
+        given self.using_left {
+            let x = self.left.next()
+            given x is Some {
+                give x
+            }
+            self.using_left = false
+        }
+        self.right.next()
+    }
+}
+
+forge chain<A, B>(left: A, right: B) -> Chain<A, B>
+  where A: Iterator, B: Iterator, A::Item == B::Item
+{
+    Chain { left, right, using_left: true }
+}
+
+// ---------------------------------------------------------
+// PEEKABLE / CLONED
+// ---------------------------------------------------------
+
+shape Peekable<I> {
+    ~iter: I
+    ~peeked: ?I::Item
+}
+
+impl<I> Peekable<I>
+  where I: Iterator
+{
+    forge peek(&~self) -> ?I::Item {
+        given self.peeked is None {
+            self.peeked = self.iter.next()
+        }
+        self.peeked
+    }
+}
+
+impl<I> Iterator for Peekable<I>
+  where I: Iterator
+{
+    type Item = I::Item
+
+    forge next(&~self) -> ?I::Item {
+        given self.peeked is Some {
+            let x = self.peeked
+            self.peeked = None
+            give x
+        }
+        self.iter.next()
+    }
+}
+
+forge peekable<I>(iter: I) -> Peekable<I>
+  where I: Iterator
+{
+    Peekable { iter, peeked: None }
+}
+
+shape Cloned<I> {
+    ~iter: I
+}
+
+impl<I> Iterator for Cloned<I>
+  where I: Iterator, I::Item: Clone
+{
+    type Item = I::Item
+
+    forge next(&~self) -> ?I::Item {
+        let x = self.iter.next()?
+        Some(x.clone())
+    }
+}
+
+forge cloned<I>(iter: I) -> Cloned<I>
+  where I: Iterator, I::Item: Clone
+{
+    Cloned { iter }
+}
+
+// ---------------------------------------------------------
+// TERMINALS
+// ---------------------------------------------------------
+
+forge collect<I, C>(~iter: I) -> C
+  where I: Iterator, C: FromIterator<I::Item>
+{
+    C::from_iter(iter)
+}
+
+forge count<I>(~iter: I) -> usize
+  where I: Iterator
+{
+    fold(iter, 0, bind |n, _| n + 1)
+}
+
+forge sum<I, T>(~iter: I) -> T
+  where I: Iterator<Item = T>, T: Add<Output = T> + Zero
+{
+    fold(iter, T::zero(), bind |a, b| a + b)
+}
+
+forge product<I, T>(~iter: I) -> T
+  where I: Iterator<Item = T>, T: Mul<Output = T> + One
+{
+    fold(iter, T::one(), bind |a, b| a * b)
+}
+
+forge min<I>(~iter: I) -> ?I::Item
+  where I: Iterator, I::Item: Ord
+{
+    let ~best = iter.next()
+    while let Some(x) = iter.next() {
+        given best is None or x < best? {
+            best = Some(x)
+        }
+    }
+    best
+}
+
+forge max<I>(~iter: I) -> ?I::Item
+  where I: Iterator, I::Item: Ord
+{
+    let ~best = iter.next()
+    while let Some(x) = iter.next() {
+        given best is None or x > best? {
+            best = Some(x)
+        }
+    }
+    best
+}
+
+forge any<I, P>(~iter: I, pred: P) -> bool
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    while let Some(x) = iter.next() {
+        given pred(&x) {
+            give true
+        }
+    }
+    false
+}
+
+forge all<I, P>(~iter: I, pred: P) -> bool
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    while let Some(x) = iter.next() {
+        given not pred(&x) {
+            give false
+        }
+    }
+    true
+}
+
+forge find<I, P>(~iter: I, pred: P) -> ?I::Item
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    while let Some(x) = iter.next() {
+        given pred(&x) {
+            give Some(x)
+        }
+    }
+    None
+}
+
+forge position<I, P>(~iter: I, pred: P) -> ?usize
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    let ~idx = 0
+    while let Some(x) = iter.next() {
+        given pred(&x) {
+            give Some(idx)
+        }
+        idx = idx + 1
+    }
+    None
+}
+
+forge partition<I, P>(~iter: I, pred: P) -> (Vec<I::Item>, Vec<I::Item>)
+  where I: Iterator, P: FnMut(&I::Item) -> bool
+{
+    let ~left = Vec::new()
+    let ~right = Vec::new()
+    while let Some(x) = iter.next() {
+        given pred(&x) {
+            left.push(x)
+        } else {
+            right.push(x)
+        }
+    }
+    (left, right)
+}
+
+forge chunks<I>(iter: I, n: usize) -> Chunks<I>
+  where I: Iterator
+{
+    Chunks { iter, size: n }
+}
+
+forge windows<I>(iter: I, n: usize) -> Windows<I>
+  where I: Iterator
+{
+    Windows { iter, size: n }
+}
+
+// Chunk/window adaptor shapes are declared so the full combinator surface exists.
+shape Chunks<I> {
+    ~iter: I
+    size: usize
+}
+
+shape Windows<I> {
+    ~iter: I
+    size: usize
+}
