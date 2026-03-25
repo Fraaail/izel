@@ -161,3 +161,54 @@ fn test_phase7_public_registry_seed_present() {
     assert!(src.contains("\"registry\": \"izel-public\""));
     assert!(src.contains("\"name\": \"std\""));
 }
+
+#[test]
+fn test_phase7_tree_sitter_grammar_assets_present() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let grammar_js = repo_root.join("tools/grammar/tree-sitter-izel/grammar.js");
+    let package_json = repo_root.join("tools/grammar/tree-sitter-izel/package.json");
+    let highlights = repo_root.join("tools/grammar/tree-sitter-izel/queries/highlights.scm");
+
+    assert!(
+        grammar_js.exists(),
+        "expected tree-sitter grammar at {:?}",
+        grammar_js
+    );
+    assert!(
+        package_json.exists(),
+        "expected tree-sitter package metadata at {:?}",
+        package_json
+    );
+    assert!(
+        highlights.exists(),
+        "expected tree-sitter highlights query at {:?}",
+        highlights
+    );
+}
+
+#[test]
+fn test_phase7_tree_sitter_grammar_contains_core_rules() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/grammar/tree-sitter-izel/grammar.js");
+    let src =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+
+    let required = [
+        "name: \"izel\"",
+        "forge_decl",
+        "shape_decl",
+        "scroll_decl",
+        "ward_decl",
+        "draw_decl",
+        "binary_expr",
+        "|>",
+    ];
+
+    for symbol in required {
+        assert!(
+            src.contains(symbol),
+            "missing tree-sitter core grammar symbol: {}",
+            symbol
+        );
+    }
+}

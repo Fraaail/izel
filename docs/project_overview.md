@@ -2179,7 +2179,7 @@ izel/
 - [x] Rewrite `izelc` in Izel
 - [x] Bootstrap: Rust-compiled Izel compiles Izel-written `izelc`
 - [x] Public Izel package registry
-- [ ] `tree-sitter-izel` grammar for broad editor support
+- [x] `tree-sitter-izel` grammar for broad editor support
 - [ ] Izel Playground (WASM-compiled browser REPL)
 
 ---
