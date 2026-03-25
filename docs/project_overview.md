@@ -2171,7 +2171,7 @@ izel/
 - [x] SIMD intrinsics
 - [x] Full `comptime` evaluation
 - [x] Comprehensive snapshot + integration test suite
-- [ ] CI/CD with coverage + nightly fuzz runs
+- [x] CI/CD with coverage + nightly fuzz runs
 - [ ] Language specification v1.0 (normative)
 
 ### Phase 7 — Self-Hosting (Months 23+)
