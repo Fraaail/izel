@@ -138,3 +138,26 @@ fn test_phase7_bootstrap_harness_has_expected_steps() {
         );
     }
 }
+
+#[test]
+fn test_phase7_public_registry_seed_present() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let registry_readme = repo_root.join("registry/README.md");
+    let package_index = repo_root.join("registry/index/packages.json");
+
+    assert!(
+        registry_readme.exists(),
+        "expected registry documentation at {:?}",
+        registry_readme
+    );
+    assert!(
+        package_index.exists(),
+        "expected registry index seed at {:?}",
+        package_index
+    );
+
+    let src = fs::read_to_string(&package_index)
+        .unwrap_or_else(|e| panic!("failed to read {:?}: {}", package_index, e));
+    assert!(src.contains("\"registry\": \"izel-public\""));
+    assert!(src.contains("\"name\": \"std\""));
+}
