@@ -2177,7 +2177,7 @@ izel/
 ### Phase 7 — Self-Hosting (Months 23+)
 
 - [x] Rewrite `izelc` in Izel
-- [ ] Bootstrap: Rust-compiled Izel compiles Izel-written `izelc`
+- [x] Bootstrap: Rust-compiled Izel compiles Izel-written `izelc`
 - [ ] Public Izel package registry
 - [ ] `tree-sitter-izel` grammar for broad editor support
 - [ ] Izel Playground (WASM-compiled browser REPL)

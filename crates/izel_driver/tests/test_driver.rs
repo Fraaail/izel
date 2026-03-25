@@ -100,3 +100,41 @@ fn test_phase7_izelc_pipeline_surface_present() {
         );
     }
 }
+
+#[test]
+fn test_phase7_bootstrap_harness_present() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = repo_root.join("tools/bootstrap/self_host_bootstrap.sh");
+    let checksums = repo_root.join("tools/bootstrap/bootstrap_sources.sha256");
+
+    assert!(script.exists(), "expected bootstrap script at {:?}", script);
+    assert!(
+        checksums.exists(),
+        "expected checksum manifest at {:?}",
+        checksums
+    );
+}
+
+#[test]
+fn test_phase7_bootstrap_harness_has_expected_steps() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/bootstrap/self_host_bootstrap.sh");
+    let src =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+
+    let required = [
+        "sha256sum -c",
+        "cargo build -p izel_driver",
+        "target/debug/izelc",
+        "compiler/izelc.iz",
+        "--execute",
+    ];
+
+    for symbol in required {
+        assert!(
+            src.contains(symbol),
+            "missing bootstrap harness step: {}",
+            symbol
+        );
+    }
+}
