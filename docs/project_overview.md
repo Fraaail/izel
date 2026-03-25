@@ -2280,6 +2280,18 @@ docs(spec): document Cascade error chain semantics
 refactor(mir): simplify CFG edge representation
 ```
 
+Validate a commit message before committing:
+
+```bash
+bash tools/ci/check_commit_message.sh --message "feat(typeck): add effect inference"
+```
+
+Validate from a commit message file:
+
+```bash
+bash tools/ci/check_commit_message.sh --from-file .git/COMMIT_EDITMSG
+```
+
 ### Pull Request Requirements
 
 - All tests pass (`cargo nextest run --workspace`).

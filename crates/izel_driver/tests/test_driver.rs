@@ -297,3 +297,38 @@ fn test_system_dependency_checker_covers_required_tools() {
         );
     }
 }
+
+#[test]
+fn test_commit_convention_checker_present() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let checker = repo_root.join("tools/ci/check_commit_message.sh");
+
+    assert!(
+        checker.exists(),
+        "expected commit convention checker at {:?}",
+        checker
+    );
+}
+
+#[test]
+fn test_commit_convention_checker_defines_required_types() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci/check_commit_message.sh");
+    let src =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {}", path, e));
+
+    let required = [
+        "feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert",
+        "--message",
+        "--from-file",
+        "Conventional Commit",
+    ];
+
+    for symbol in required {
+        assert!(
+            src.contains(symbol),
+            "missing commit checker symbol: {}",
+            symbol
+        );
+    }
+}

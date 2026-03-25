@@ -193,7 +193,7 @@
 
 ## 36. Contributing Guidelines
 - [x] Getting Started
-- [ ] Commit Convention (Conventional Commits)
+- [x] Commit Convention (Conventional Commits)
 - [x] Pull Request Requirements
 - [x] Testing Philosophy
 
