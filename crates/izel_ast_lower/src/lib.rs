@@ -2259,12 +2259,11 @@ mod tests {
         let mut items = lowerer.lower_item(&cst);
         let item = items.pop().unwrap();
 
+        assert!(matches!(item, ast::Item::Forge(_)));
         if let ast::Item::Forge(f) = item {
             assert_eq!(f.name, "f");
             assert_eq!(f.attributes.len(), 1);
             assert_eq!(f.attributes[0].name, "proof");
-        } else {
-            panic!("Expected Forge item");
         }
     }
 
@@ -2280,13 +2279,12 @@ mod tests {
         let mut items = lowerer.lower_item(&cst);
         let item = items.pop().unwrap();
 
+        assert!(matches!(item, ast::Item::Forge(_)));
         if let ast::Item::Forge(f) = item {
             assert_eq!(f.name, "f");
             assert_eq!(f.attributes.len(), 1);
             assert_eq!(f.attributes[0].name, "requires");
             assert_eq!(f.attributes[0].args.len(), 1);
-        } else {
-            panic!("Expected Forge item");
         }
     }
 
@@ -2301,12 +2299,10 @@ mod tests {
         let lowerer = Lowerer::new(source);
         let expr = lowerer.lower_expr(&cst);
 
-        match expr {
-            ast::Expr::Cascade { expr, context } => {
-                assert!(matches!(*expr, ast::Expr::Ident(..)));
-                assert!(context.is_none());
-            }
-            _ => panic!("Expected Expr::Cascade"),
+        assert!(matches!(expr, ast::Expr::Cascade { .. }));
+        if let ast::Expr::Cascade { expr, context } = expr {
+            assert!(matches!(*expr, ast::Expr::Ident(..)));
+            assert!(context.is_none());
         }
     }
 
@@ -2321,12 +2317,10 @@ mod tests {
         let lowerer = Lowerer::new(source);
         let expr = lowerer.lower_expr(&cst);
 
-        match expr {
-            ast::Expr::Literal(ast::Literal::Str(s)) => {
-                // Line 1 because the string only has one line, file 'main.iz' is default
-                assert_eq!(s, "main.iz:1");
-            }
-            _ => panic!("Expected Expr::Literal(Str)"),
+        assert!(matches!(expr, ast::Expr::Literal(ast::Literal::Str(_))));
+        if let ast::Expr::Literal(ast::Literal::Str(s)) = expr {
+            // Line 1 because the string only has one line, file 'main.iz' is default
+            assert_eq!(s, "main.iz:1");
         }
     }
 
@@ -2342,6 +2336,7 @@ mod tests {
         let mut items = lowerer.lower_item(&cst);
         let item = items.remove(0); // Take the first item which should be Dual
 
+        assert!(matches!(item, ast::Item::Dual(_)));
         if let ast::Item::Dual(d) = item {
             assert_eq!(d.name, "JsonFormat");
             assert_eq!(d.generic_params.len(), 1);
@@ -2364,8 +2359,6 @@ mod tests {
                 found_encode && found_decode,
                 "Both encode and decode should be present"
             );
-        } else {
-            panic!("Expected Dual item");
         }
     }
 
@@ -2381,6 +2374,7 @@ mod tests {
         let mut items = lowerer.lower_item(&cst);
         let item = items.remove(0);
 
+        assert!(matches!(item, ast::Item::Dual(_)));
         if let ast::Item::Dual(d) = item {
             assert_eq!(d.name, "Point");
             // Should contain: Shape, encode, decode (3 items total)
@@ -2403,8 +2397,6 @@ mod tests {
                 }
             }
             assert!(has_shape && has_encode && has_decode);
-        } else {
-            panic!("Expected Dual item");
         }
     }
 
@@ -2432,6 +2424,7 @@ mod tests {
         let lowerer = Lowerer::new(source);
         let items = lowerer.lower_item(&cst);
 
+        assert!(matches!(items[0], ast::Item::Dual(_)));
         if let ast::Item::Dual(d) = &items[0] {
             let mut found_encode = false;
             let mut found_decode = false;
@@ -2451,8 +2444,6 @@ mod tests {
                 found_encode && found_decode,
                 "Both encode and decode should be present after elaboration"
             );
-        } else {
-            panic!("Expected a Dual item");
         }
     }
 
@@ -2579,27 +2570,24 @@ mod tests {
             })
             .expect("expected let initializer");
 
-        match let_init {
-            ast::Expr::Block(block) => match block.expr.as_ref().map(|e| e.as_ref()) {
-                Some(ast::Expr::Binary(ast::BinaryOp::Add, lhs, rhs)) => {
-                    assert!(matches!(
-                        lhs.as_ref(),
-                        ast::Expr::Literal(ast::Literal::Int(41))
-                    ));
-                    assert!(matches!(
-                        rhs.as_ref(),
-                        ast::Expr::Literal(ast::Literal::Int(1))
-                    ));
-                }
-                other => panic!(
-                    "expected expanded binary expr in macro body, got {:?}",
-                    other
-                ),
-            },
-            other => panic!(
-                "expected macro expansion to lower to block expression, got {:?}",
-                other
-            ),
+        assert!(matches!(let_init, ast::Expr::Block(_)));
+        if let ast::Expr::Block(block) = let_init {
+            assert!(matches!(
+                block.expr.as_ref().map(|e| e.as_ref()),
+                Some(ast::Expr::Binary(ast::BinaryOp::Add, _, _))
+            ));
+            if let Some(ast::Expr::Binary(ast::BinaryOp::Add, lhs, rhs)) =
+                block.expr.as_ref().map(|e| e.as_ref())
+            {
+                assert!(matches!(
+                    lhs.as_ref(),
+                    ast::Expr::Literal(ast::Literal::Int(41))
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    ast::Expr::Literal(ast::Literal::Int(1))
+                ));
+            }
         }
     }
 
@@ -2651,10 +2639,13 @@ mod tests {
         let lowerer = Lowerer::new(macro_source);
         let mut items = lowerer.lower_item(&macro_cst);
 
-        let mac = match items.remove(0) {
-            ast::Item::Macro(m) => m,
-            other => panic!("expected macro item, got {other:?}"),
-        };
+        let first_item = items.remove(0);
+        assert!(matches!(first_item, ast::Item::Macro(_)));
+        let mut mac_opt = None;
+        if let ast::Item::Macro(m) = first_item {
+            mac_opt = Some(m);
+        }
+        let mac = mac_opt.expect("expected macro item");
         assert_eq!(mac.name, "gather");
         assert_eq!(mac.params.len(), 1);
         assert!(mac.params[0].is_variadic);
@@ -2664,10 +2655,13 @@ mod tests {
         let bridge_lowerer = Lowerer::new(bridge_source);
         let mut bridge_items = bridge_lowerer.lower_item(&bridge_cst);
 
-        let bridge = match bridge_items.remove(0) {
-            ast::Item::Bridge(b) => b,
-            other => panic!("expected bridge item, got {other:?}"),
-        };
+        let first_bridge_item = bridge_items.remove(0);
+        assert!(matches!(first_bridge_item, ast::Item::Bridge(_)));
+        let mut bridge_opt = None;
+        if let ast::Item::Bridge(b) = first_bridge_item {
+            bridge_opt = Some(b);
+        }
+        let bridge = bridge_opt.expect("expected bridge item");
 
         assert_eq!(bridge.abi.as_deref(), Some("C"));
         assert!(bridge
@@ -2703,10 +2697,13 @@ mod tests {
         let draw_lowerer = Lowerer::new(draw_source);
         let mut items = draw_lowerer.lower_item(&draw_cst);
 
-        let draw = match items.remove(0) {
-            ast::Item::Draw(d) => d,
-            other => panic!("expected draw item, got {other:?}"),
-        };
+        let first_item = items.remove(0);
+        assert!(matches!(first_item, ast::Item::Draw(_)));
+        let mut draw_opt = None;
+        if let ast::Item::Draw(d) = first_item {
+            draw_opt = Some(d);
+        }
+        let draw = draw_opt.expect("expected draw item");
         assert_eq!(draw.path, vec!["std".to_string(), "io".to_string()]);
         assert!(draw.is_wildcard);
 
@@ -2784,36 +2781,30 @@ mod tests {
         let source = "x |> f";
         let lowerer = Lowerer::new(source);
         let expr = lowerer.lower_expr(&parse_expr_node(source));
-        match expr {
-            ast::Expr::Call(callee, args) => {
-                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
-                assert_eq!(args.len(), 1);
-                assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
-            }
-            other => panic!("expected desugared pipeline call, got {other:?}"),
+        assert!(matches!(expr, ast::Expr::Call(_, _)));
+        if let ast::Expr::Call(callee, args) = expr {
+            assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
         }
 
         let source = "x |> f(1)";
         let lowerer = Lowerer::new(source);
         let expr = lowerer.lower_expr(&parse_expr_node(source));
-        match expr {
-            ast::Expr::Call(callee, args) => {
-                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
-                assert_eq!(args.len(), 2);
-                assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
-            }
-            other => panic!("expected desugared pipeline call with args, got {other:?}"),
+        assert!(matches!(expr, ast::Expr::Call(_, _)));
+        if let ast::Expr::Call(callee, args) = expr {
+            assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
         }
 
         let source = "x ?? y";
         let lowerer = Lowerer::new(source);
         let expr = lowerer.lower_expr(&parse_expr_node(source));
-        match expr {
-            ast::Expr::Branch { target, arms } => {
-                assert!(matches!(*target, ast::Expr::Ident(ref n, _) if n == "x"));
-                assert_eq!(arms.len(), 4);
-            }
-            other => panic!("expected coalesce desugar to branch, got {other:?}"),
+        assert!(matches!(expr, ast::Expr::Branch { .. }));
+        if let ast::Expr::Branch { target, arms } = expr {
+            assert!(matches!(*target, ast::Expr::Ident(ref n, _) if n == "x"));
+            assert_eq!(arms.len(), 4);
         }
 
         let source = "obj?.field";
@@ -2844,11 +2835,9 @@ mod tests {
         let branch_src = "branch x { y given true => 1, _ => 2 }";
         let lowerer = Lowerer::new(branch_src);
         let branch_expr = lowerer.lower_expr(&parse_expr_node(branch_src));
-        match branch_expr {
-            ast::Expr::Branch { arms, .. } => {
-                assert!(!arms.is_empty());
-            }
-            other => panic!("expected branch expression, got {other:?}"),
+        assert!(matches!(branch_expr, ast::Expr::Branch { .. }));
+        if let ast::Expr::Branch { arms, .. } = branch_expr {
+            assert!(!arms.is_empty());
         }
 
         fn sp(lo: u32, hi: u32) -> Span {
@@ -2881,12 +2870,10 @@ mod tests {
         );
 
         let manual_expr = lowerer.lower_expr(&manual_branch);
-        match manual_expr {
-            ast::Expr::Branch { arms, .. } => {
-                assert_eq!(arms.len(), 1);
-                assert!(arms[0].guard.is_some());
-            }
-            other => panic!("expected manual branch expression, got {other:?}"),
+        assert!(matches!(manual_expr, ast::Expr::Branch { .. }));
+        if let ast::Expr::Branch { arms, .. } = manual_expr {
+            assert_eq!(arms.len(), 1);
+            assert!(arms[0].guard.is_some());
         }
 
         let zone_src = "zone arena { 1 }";
@@ -2925,12 +2912,10 @@ mod tests {
         let asm_src = "asm!(\"nop\")";
         let lowerer = Lowerer::new(asm_src);
         let asm_expr = lowerer.lower_expr(&parse_expr_node(asm_src));
-        match asm_expr {
-            ast::Expr::Call(callee, args) => {
-                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "asm"));
-                assert_eq!(args.len(), 1);
-            }
-            other => panic!("expected asm builtin call lowering, got {other:?}"),
+        assert!(matches!(asm_expr, ast::Expr::Call(_, _)));
+        if let ast::Expr::Call(callee, args) = asm_expr {
+            assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "asm"));
+            assert_eq!(args.len(), 1);
         }
 
         let unknown_src = "does_not_exist!(1)";
@@ -3037,5 +3022,395 @@ mod tests {
 
         let expr = lowerer.lower_expr(&call);
         assert!(matches!(expr, ast::Expr::WitnessNew(_)));
+    }
+
+    #[test]
+    fn test_lower_non_typeck_decl_and_impl_paths() {
+        fn lower_from(source: &str) -> ast::Module {
+            let tokens = tokenize(source);
+            let mut parser = Parser::new(tokens, source.to_string());
+            parser.source = source.to_string();
+            let cst = parser.parse_source_file();
+            Lowerer::new(source).lower_module(&cst)
+        }
+
+        let weave_module = lower_from(
+            r#"
+            @doc("weave")
+            weave Renderable: Base + Debug {
+                type Item = i32
+                forge render(self) !io { give 0 }
+            }
+        "#,
+        );
+        let weave_decl = weave_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Weave(w) = item {
+                    Some(w)
+                } else {
+                    None
+                }
+            })
+            .expect("expected weave declaration");
+        assert!(weave_decl
+            .associated_types
+            .iter()
+            .any(|name| name == "Item"));
+        assert!(weave_decl.methods.iter().any(|f| f.name == "render"));
+        assert!(!weave_decl.attributes.is_empty());
+
+        let ward_module = lower_from(
+            r#"
+            @sealed
+            ward Core {
+                forge helper() { give 0 }
+            }
+        "#,
+        );
+        let ward = ward_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Ward(w) = item {
+                    Some(w)
+                } else {
+                    None
+                }
+            })
+            .expect("expected ward declaration");
+        assert!(!ward.items.is_empty());
+        assert!(!ward.attributes.is_empty());
+
+        let scroll_module = lower_from("scroll Color { Red, Green, Blue }");
+        assert!(scroll_module
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Scroll(_))));
+
+        let impl_with_weave_module = lower_from(
+            r#"
+            weave Renderable for Widget {
+                type Assoc = i32
+                forge render(self) { give }
+            }
+        "#,
+        );
+        let impl_with_weave = impl_with_weave_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Impl(i) = item {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .expect("expected weave-based impl block");
+        assert!(impl_with_weave
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Alias(_))));
+        assert!(impl_with_weave
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Forge(_))));
+
+        let impl_without_weave_module = lower_from(
+            r#"
+            impl Widget {
+                forge touch(self) { give }
+            }
+        "#,
+        );
+        let impl_without_weave = impl_without_weave_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Impl(i) = item {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .expect("expected impl block without for-clause");
+        assert!(impl_without_weave.weave.is_none());
+        assert!(impl_without_weave
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Forge(_))));
+
+        let draw_module = lower_from("draw std/io::*;");
+        assert!(draw_module
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Draw(_))));
+
+        let tail_module = lower_from(
+            r#"
+            type MaybeI32 = ?i32
+
+            @tag
+            static ~COUNTER: i32 = 1
+
+            @note
+            echo { 1 }
+        "#,
+        );
+        assert!(tail_module
+            .items
+            .iter()
+            .any(|item| matches!(item, ast::Item::Alias(_))));
+
+        let static_item = tail_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Static(s) = item {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .expect("expected static declaration");
+        assert_eq!(static_item.name, "COUNTER");
+        assert!(static_item.is_mut);
+        assert!(!static_item.attributes.is_empty());
+        assert!(matches!(static_item.ty, ast::Type::Prim(ref n) if n == "i32"));
+        assert!(matches!(
+            static_item.value,
+            Some(ast::Expr::Literal(ast::Literal::Int(1)))
+        ));
+
+        let echo_item = tail_module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Echo(e) = item {
+                    Some(e)
+                } else {
+                    None
+                }
+            })
+            .expect("expected echo declaration");
+        assert!(matches!(
+            echo_item.body.expr.as_deref(),
+            Some(ast::Expr::Literal(ast::Literal::Int(1)))
+        ));
+
+        let effect_lowerer = Lowerer::new("pure");
+        let pure_effect = SyntaxNode::new(
+            NodeKind::Effect,
+            vec![SyntaxElement::Token(Token::new(
+                TokenKind::Pure,
+                Span::new(BytePos(0), BytePos(4), SourceId(0)),
+            ))],
+        );
+        assert_eq!(effect_lowerer.lower_effect(&pure_effect), "pure");
+        assert_eq!(
+            effect_lowerer.lower_effect(&SyntaxNode::new(NodeKind::Effect, vec![])),
+            ""
+        );
+    }
+
+    #[test]
+    fn test_desugar_macro_and_substitution_helper_branches() {
+        fn sp(lo: u32, hi: u32) -> Span {
+            Span::new(BytePos(lo), BytePos(hi), SourceId(0))
+        }
+
+        let lowerer = Lowerer::new("mx");
+
+        let fallback_pipeline = lowerer.desugar_pipeline(
+            ast::Expr::Ident("x".to_string(), Span::dummy()),
+            ast::Expr::Literal(ast::Literal::Int(1)),
+        );
+        assert!(matches!(fallback_pipeline, ast::Expr::Call(_, _)));
+
+        let macro_call = SyntaxNode::new(
+            NodeKind::MacroCall,
+            vec![
+                SyntaxElement::Token(Token::new(TokenKind::Ident, sp(0, 1))),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Arg,
+                    vec![SyntaxElement::Node(SyntaxNode::new(
+                        NodeKind::Ident,
+                        vec![SyntaxElement::Token(Token::new(TokenKind::Ident, sp(1, 2)))],
+                    ))],
+                )),
+            ],
+        );
+        let (macro_name, macro_args) = lowerer.lower_macro_call(&macro_call);
+        assert_eq!(macro_name, "m");
+        assert_eq!(macro_args.len(), 1);
+
+        let macro_decl = ast::MacroDecl {
+            name: "single".to_string(),
+            params: vec![ast::MacroParam {
+                name: "x".to_string(),
+                is_variadic: false,
+                span: Span::dummy(),
+            }],
+            body: ast::Block {
+                stmts: vec![],
+                expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                span: Span::dummy(),
+            },
+            span: Span::dummy(),
+        };
+        let mismatch = lowerer.expand_macro_call(&macro_decl, &[]);
+        assert!(matches!(mismatch, ast::Expr::Literal(ast::Literal::Nil)));
+
+        let mut subst = std::collections::HashMap::new();
+        subst.insert("x".to_string(), ast::Expr::Literal(ast::Literal::Int(7)));
+
+        let replaced_ident =
+            lowerer.substitute_expr(&ast::Expr::Ident("x".to_string(), Span::dummy()), &subst);
+        assert!(matches!(
+            replaced_ident,
+            ast::Expr::Literal(ast::Literal::Int(7))
+        ));
+
+        let untouched_ident =
+            lowerer.substitute_expr(&ast::Expr::Ident("y".to_string(), Span::dummy()), &subst);
+        assert!(matches!(untouched_ident, ast::Expr::Ident(ref name, _) if name == "y"));
+
+        let _ = lowerer.substitute_stmt(
+            &ast::Stmt::Expr(ast::Expr::Ident("x".to_string(), Span::dummy())),
+            &subst,
+        );
+        let _ = lowerer.substitute_stmt(
+            &ast::Stmt::Let {
+                pat: ast::Pattern::Ident("v".to_string(), false, Span::dummy()),
+                ty: Some(ast::Type::Prim("i32".to_string())),
+                init: Some(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                span: Span::dummy(),
+            },
+            &subst,
+        );
+
+        let _ = lowerer.substitute_block(
+            &ast::Block {
+                stmts: vec![ast::Stmt::Expr(ast::Expr::Ident(
+                    "x".to_string(),
+                    Span::dummy(),
+                ))],
+                expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                span: Span::dummy(),
+            },
+            &subst,
+        );
+
+        let branch_arms = vec![ast::Arm {
+            pattern: ast::Pattern::Wildcard,
+            guard: Some(ast::Expr::Ident("x".to_string(), Span::dummy())),
+            body: ast::Expr::Ident("x".to_string(), Span::dummy()),
+            span: Span::dummy(),
+        }];
+
+        let samples = vec![
+            ast::Expr::Binary(
+                ast::BinaryOp::Add,
+                Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                Box::new(ast::Expr::Literal(ast::Literal::Int(1))),
+            ),
+            ast::Expr::Unary(
+                ast::UnaryOp::Neg,
+                Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+            ),
+            ast::Expr::Call(
+                Box::new(ast::Expr::Ident("f".to_string(), Span::dummy())),
+                vec![ast::Arg {
+                    label: Some("arg".to_string()),
+                    value: ast::Expr::Ident("x".to_string(), Span::dummy()),
+                    span: Span::dummy(),
+                }],
+            ),
+            ast::Expr::Member(
+                Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                "field".to_string(),
+                Span::dummy(),
+            ),
+            ast::Expr::Block(ast::Block {
+                stmts: vec![],
+                expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                span: Span::dummy(),
+            }),
+            ast::Expr::Given {
+                cond: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                then_block: ast::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                    span: Span::dummy(),
+                },
+                else_expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+            },
+            ast::Expr::While {
+                cond: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                body: ast::Block {
+                    stmts: vec![],
+                    expr: None,
+                    span: Span::dummy(),
+                },
+            },
+            ast::Expr::Zone {
+                name: "arena".to_string(),
+                body: ast::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                    span: Span::dummy(),
+                },
+            },
+            ast::Expr::Each {
+                var: "it".to_string(),
+                iter: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                body: ast::Block {
+                    stmts: vec![],
+                    expr: None,
+                    span: Span::dummy(),
+                },
+            },
+            ast::Expr::Bind {
+                params: vec!["x".to_string()],
+                body: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+            },
+            ast::Expr::Branch {
+                target: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                arms: branch_arms,
+            },
+            ast::Expr::Seek {
+                body: ast::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                    span: Span::dummy(),
+                },
+                catch_var: Some("err".to_string()),
+                catch_body: Some(ast::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+                    span: Span::dummy(),
+                }),
+            },
+            ast::Expr::Raw(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+            ast::Expr::Return(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+            ast::Expr::StructLiteral {
+                path: ast::Type::Prim("Point".to_string()),
+                fields: vec![(
+                    "x".to_string(),
+                    ast::Expr::Ident("x".to_string(), Span::dummy()),
+                )],
+            },
+            ast::Expr::Cascade {
+                expr: Box::new(ast::Expr::Ident("x".to_string(), Span::dummy())),
+                context: Some(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+            },
+            ast::Expr::Tide(Box::new(ast::Expr::Ident("x".to_string(), Span::dummy()))),
+            ast::Expr::Path(vec!["P".to_string()], vec![]),
+        ];
+
+        for expr in samples {
+            let _ = lowerer.substitute_expr(&expr, &subst);
+        }
     }
 }
