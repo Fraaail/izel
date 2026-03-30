@@ -2240,6 +2240,13 @@ mod tests {
         parser.parse_pattern()
     }
 
+    fn parse_expr_node(source: &str) -> SyntaxNode {
+        let tokens = tokenize(source);
+        let mut parser = Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        parser.parse_expr(izel_parser::expr::Precedence::None)
+    }
+
     #[test]
     fn test_lower_attributes() {
         let source = "@proof forge f() {}";
@@ -2770,5 +2777,265 @@ mod tests {
         let wildcard_lowerer = Lowerer::new("_");
         let wildcard = wildcard_lowerer.lower_pattern(&parse_pattern_node("_"));
         assert!(matches!(wildcard, ast::Pattern::Wildcard));
+    }
+
+    #[test]
+    fn test_lower_pipeline_coalesce_and_optional_chain_exprs() {
+        let source = "x |> f";
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&parse_expr_node(source));
+        match expr {
+            ast::Expr::Call(callee, args) => {
+                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
+            }
+            other => panic!("expected desugared pipeline call, got {other:?}"),
+        }
+
+        let source = "x |> f(1)";
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&parse_expr_node(source));
+        match expr {
+            ast::Expr::Call(callee, args) => {
+                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "f"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(args[0].value, ast::Expr::Ident(ref n, _) if n == "x"));
+            }
+            other => panic!("expected desugared pipeline call with args, got {other:?}"),
+        }
+
+        let source = "x ?? y";
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&parse_expr_node(source));
+        match expr {
+            ast::Expr::Branch { target, arms } => {
+                assert!(matches!(*target, ast::Expr::Ident(ref n, _) if n == "x"));
+                assert_eq!(arms.len(), 4);
+            }
+            other => panic!("expected coalesce desugar to branch, got {other:?}"),
+        }
+
+        let source = "obj?.field";
+        let lowerer = Lowerer::new(source);
+        let expr = lowerer.lower_expr(&parse_expr_node(source));
+        assert!(matches!(
+            expr,
+            ast::Expr::Given {
+                else_expr: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_lower_special_expression_forms() {
+        let given_src = "given true { 1 } else given false { 2 }";
+        let lowerer = Lowerer::new(given_src);
+        let given_expr = lowerer.lower_expr(&parse_expr_node(given_src));
+        assert!(matches!(
+            given_expr,
+            ast::Expr::Given {
+                else_expr: Some(_),
+                ..
+            }
+        ));
+
+        let branch_src = "branch x { y given true => 1, _ => 2 }";
+        let lowerer = Lowerer::new(branch_src);
+        let branch_expr = lowerer.lower_expr(&parse_expr_node(branch_src));
+        match branch_expr {
+            ast::Expr::Branch { arms, .. } => {
+                assert!(!arms.is_empty());
+            }
+            other => panic!("expected branch expression, got {other:?}"),
+        }
+
+        fn sp(lo: u32, hi: u32) -> Span {
+            Span::new(BytePos(lo), BytePos(hi), SourceId(0))
+        }
+
+        let manual_source = "xy";
+        let lowerer = Lowerer::new(manual_source);
+        let manual_branch = SyntaxNode::new(
+            NodeKind::BranchExpr,
+            vec![
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(Token::new(TokenKind::Ident, sp(0, 1)))],
+                )),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Pattern,
+                    vec![SyntaxElement::Token(Token::new(TokenKind::Ident, sp(1, 2)))],
+                )),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Literal,
+                    vec![SyntaxElement::Token(Token::new(TokenKind::True, sp(0, 0)))],
+                )),
+                SyntaxElement::Token(Token::new(TokenKind::FatArrow, sp(0, 0))),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Literal,
+                    vec![SyntaxElement::Token(Token::new(TokenKind::False, sp(0, 0)))],
+                )),
+            ],
+        );
+
+        let manual_expr = lowerer.lower_expr(&manual_branch);
+        match manual_expr {
+            ast::Expr::Branch { arms, .. } => {
+                assert_eq!(arms.len(), 1);
+                assert!(arms[0].guard.is_some());
+            }
+            other => panic!("expected manual branch expression, got {other:?}"),
+        }
+
+        let zone_src = "zone arena { 1 }";
+        let lowerer = Lowerer::new(zone_src);
+        let zone_expr = lowerer.lower_expr(&parse_expr_node(zone_src));
+        assert!(matches!(zone_expr, ast::Expr::Zone { ref name, .. } if name == "arena"));
+
+        let seek_src = "seek { 1 } catch err { 2 }";
+        let lowerer = Lowerer::new(seek_src);
+        let seek_expr = lowerer.lower_expr(&parse_expr_node(seek_src));
+        assert!(matches!(
+            seek_expr,
+            ast::Expr::Seek {
+                catch_var: Some(ref n),
+                catch_body: Some(_),
+                ..
+            } if n == "err"
+        ));
+
+        let bind_src = "bind |x, y| x";
+        let lowerer = Lowerer::new(bind_src);
+        let bind_expr = lowerer.lower_expr(&parse_expr_node(bind_src));
+        assert!(matches!(
+            bind_expr,
+            ast::Expr::Bind { ref params, .. } if params == &vec!["x".to_string(), "y".to_string()]
+        ));
+
+        let raw_src = "raw { 1 }";
+        let lowerer = Lowerer::new(raw_src);
+        let raw_expr = lowerer.lower_expr(&parse_expr_node(raw_src));
+        assert!(matches!(raw_expr, ast::Expr::Raw(_)));
+    }
+
+    #[test]
+    fn test_lower_macro_call_variants_and_variadic_expansion_fallback() {
+        let asm_src = "asm!(\"nop\")";
+        let lowerer = Lowerer::new(asm_src);
+        let asm_expr = lowerer.lower_expr(&parse_expr_node(asm_src));
+        match asm_expr {
+            ast::Expr::Call(callee, args) => {
+                assert!(matches!(*callee, ast::Expr::Ident(ref n, _) if n == "asm"));
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected asm builtin call lowering, got {other:?}"),
+        }
+
+        let unknown_src = "does_not_exist!(1)";
+        let lowerer = Lowerer::new(unknown_src);
+        let unknown_expr = lowerer.lower_expr(&parse_expr_node(unknown_src));
+        assert!(matches!(
+            unknown_expr,
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let module_src = r#"
+            macro gather(..args) { args }
+            forge main() {
+                let x = gather!(1, 2)
+            }
+        "#;
+        let tokens = tokenize(module_src);
+        let mut parser = Parser::new(tokens, module_src.to_string());
+        parser.source = module_src.to_string();
+        let cst = parser.parse_source_file();
+
+        let lowerer = Lowerer::new(module_src);
+        let module = lowerer.lower_module(&cst);
+
+        let main = module
+            .items
+            .iter()
+            .find_map(|item| {
+                if let ast::Item::Forge(f) = item {
+                    if f.name == "main" {
+                        return Some(f);
+                    }
+                }
+                None
+            })
+            .expect("expected main forge");
+
+        let body = main.body.as_ref().expect("main should have body");
+        let init = body
+            .stmts
+            .iter()
+            .find_map(|stmt| {
+                if let ast::Stmt::Let { init, .. } = stmt {
+                    return init.as_ref();
+                }
+                None
+            })
+            .expect("expected let initializer");
+
+        assert!(matches!(init, ast::Expr::Literal(ast::Literal::Nil)));
+    }
+
+    #[test]
+    fn test_lower_call_witness_new_from_manual_cst() {
+        fn sp(lo: u32, hi: u32) -> Span {
+            Span::new(BytePos(lo), BytePos(hi), SourceId(0))
+        }
+
+        let source = "Witnessi32new";
+        let lowerer = Lowerer::new(source);
+
+        let witness_ident = SyntaxNode::new(
+            NodeKind::Ident,
+            vec![SyntaxElement::Token(Token::new(TokenKind::Ident, sp(0, 7)))],
+        );
+        let i32_ident = SyntaxNode::new(
+            NodeKind::Ident,
+            vec![SyntaxElement::Token(Token::new(
+                TokenKind::Ident,
+                sp(7, 10),
+            ))],
+        );
+        let generic_arg = SyntaxNode::new(
+            NodeKind::GenericArg,
+            vec![SyntaxElement::Node(i32_ident.clone())],
+        );
+        let generic_args = SyntaxNode::new(
+            NodeKind::GenericArgs,
+            vec![SyntaxElement::Node(generic_arg)],
+        );
+        let witness_type = SyntaxNode::new(
+            NodeKind::Type,
+            vec![
+                SyntaxElement::Node(witness_ident),
+                SyntaxElement::Node(generic_args),
+            ],
+        );
+        let member = SyntaxNode::new(
+            NodeKind::MemberExpr,
+            vec![
+                SyntaxElement::Node(witness_type),
+                SyntaxElement::Token(Token::new(TokenKind::Dot, sp(10, 11))),
+                SyntaxElement::Token(Token::new(TokenKind::Ident, sp(10, 13))),
+            ],
+        );
+        let call = SyntaxNode::new(
+            NodeKind::CallExpr,
+            vec![
+                SyntaxElement::Node(member),
+                SyntaxElement::Token(Token::new(TokenKind::OpenParen, sp(13, 14))),
+                SyntaxElement::Token(Token::new(TokenKind::CloseParen, sp(14, 15))),
+            ],
+        );
+
+        let expr = lowerer.lower_expr(&call);
+        assert!(matches!(expr, ast::Expr::WitnessNew(_)));
     }
 }
