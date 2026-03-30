@@ -36,6 +36,18 @@ fn assert_has_diagnostic(checker: &TypeChecker, needle: &str) {
     );
 }
 
+fn assert_no_diagnostic(checker: &TypeChecker, needle: &str) {
+    let messages: Vec<String> = checker
+        .diagnostics
+        .iter()
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        messages.iter().all(|m| !m.contains(needle)),
+        "did not expect diagnostic containing '{needle}', got: {messages:?}"
+    );
+}
+
 #[test]
 fn with_builtins_registers_core_primitive_types_and_ptr() {
     let mut checker = TypeChecker::with_builtins();
@@ -409,4 +421,178 @@ fn echo_validation_reports_purity_for_effectful_calls() {
         &checker,
         "echo block must be pure and cannot use runtime effects",
     );
+}
+
+#[test]
+fn check_forge_reports_ensures_violation_for_const_return() {
+    let module = parse_module(
+        r#"
+@ensures(result > 0)
+forge bad_ensures() -> i32 {
+    0
+}
+"#,
+    );
+
+    let mut checker = TypeChecker::with_builtins();
+    checker.check_ast(&module);
+
+    assert_has_diagnostic(&checker, "postcondition violation");
+}
+
+#[test]
+fn error_attribute_is_rejected_on_all_non_scroll_item_kinds() {
+    let module = parse_module(
+        r#"
+@error
+weave W {}
+
+@error
+ward Bag {}
+
+@error
+static x: i32 = 1
+
+@error
+forge f() {}
+
+@error
+shape S {}
+
+@error
+dual shape D {}
+
+@error
+type A = i32
+
+@error
+echo { 1 }
+
+@error
+bridge "C" {}
+"#,
+    );
+
+    let mut checker = TypeChecker::with_builtins();
+    checker.check_ast(&module);
+
+    assert_has_diagnostic(&checker, "found on weave");
+    assert_has_diagnostic(&checker, "found on ward 'Bag'");
+    assert_has_diagnostic(&checker, "found on static 'x'");
+    assert_has_diagnostic(&checker, "found on forge 'f'");
+    assert_has_diagnostic(&checker, "found on shape 'S'");
+    assert_has_diagnostic(&checker, "found on dual 'D'");
+    assert_has_diagnostic(&checker, "found on alias 'A'");
+}
+
+#[test]
+fn error_attribute_on_echo_and_bridge_is_rejected() {
+    let error_attr = ast::Attribute {
+        name: "error".to_string(),
+        args: vec![],
+        span: Span::dummy(),
+    };
+
+    let module = ast::Module {
+        items: vec![
+            ast::Item::Echo(ast::Echo {
+                body: ast::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(ast::Expr::Literal(ast::Literal::Int(1)))),
+                    span: Span::dummy(),
+                },
+                attributes: vec![error_attr.clone()],
+                span: Span::dummy(),
+            }),
+            ast::Item::Bridge(ast::Bridge {
+                abi: Some("C".to_string()),
+                items: vec![],
+                attributes: vec![error_attr],
+                span: Span::dummy(),
+            }),
+        ],
+    };
+
+    let mut checker = TypeChecker::with_builtins();
+    checker.check_ast(&module);
+
+    assert_has_diagnostic(&checker, "found on echo block");
+    assert_has_diagnostic(&checker, "found on bridge block");
+}
+
+#[test]
+fn effect_boundary_invalid_arg_is_reported_and_valid_effect_still_masks() {
+    let module = parse_module(
+        r#"
+@effect_boundary(io, 1)
+forge wrapped() -> void !io {}
+
+forge caller() -> void {
+    wrapped()
+}
+"#,
+    );
+
+    let mut checker = TypeChecker::with_builtins();
+    checker.check_ast(&module);
+
+    assert_has_diagnostic(&checker, "invalid #[effect_boundary] argument");
+    assert_no_diagnostic(&checker, "Function has effects");
+}
+
+#[test]
+fn impl_duplicate_and_orphan_paths_are_exercised() {
+    let weave_item = ast::Item::Weave(ast::Weave {
+        name: "LocalWeave".to_string(),
+        visibility: ast::Visibility::Open,
+        parents: vec![],
+        associated_types: vec![],
+        methods: vec![],
+        attributes: vec![],
+        span: Span::dummy(),
+    });
+
+    let local_impl = ast::Item::Impl(ast::Impl {
+        target: ast::Type::Prim("i32".to_string()),
+        weave: Some(ast::Type::Prim("LocalWeave".to_string())),
+        items: vec![],
+        attributes: vec![],
+        span: Span::dummy(),
+    });
+
+    let duplicate_local_impl = ast::Item::Impl(ast::Impl {
+        target: ast::Type::Prim("i32".to_string()),
+        weave: Some(ast::Type::Prim("LocalWeave".to_string())),
+        items: vec![],
+        attributes: vec![],
+        span: Span::dummy(),
+    });
+
+    let module = ast::Module {
+        items: vec![weave_item, local_impl, duplicate_local_impl],
+    };
+
+    let mut checker = TypeChecker::with_builtins();
+    checker.check_ast(&module);
+
+    let local_impl_count = checker
+        .trait_impls
+        .get("LocalWeave")
+        .map(|v| v.len())
+        .unwrap_or(0);
+    assert_eq!(local_impl_count, 1, "duplicate impl should not be inserted");
+
+    let orphan_module = ast::Module {
+        items: vec![ast::Item::Impl(ast::Impl {
+            target: ast::Type::Prim("i32".to_string()),
+            weave: Some(ast::Type::Prim("ForeignWeave".to_string())),
+            items: vec![],
+            attributes: vec![],
+            span: Span::dummy(),
+        })],
+    };
+
+    let mut orphan_checker = TypeChecker::with_builtins();
+    orphan_checker.check_ast(&orphan_module);
+    assert!(!orphan_checker.trait_impls.contains_key("ForeignWeave"));
 }

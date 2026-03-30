@@ -4606,4 +4606,530 @@ mod tests {
             "Should allow construction of NonZero in #[proof] function"
         );
     }
+
+    #[test]
+    fn test_register_overloads_and_resolve_scheme_visibility_variants() {
+        fn mk_scheme(visibility: ast::Visibility) -> Scheme {
+            Scheme {
+                vars: vec![],
+                effect_vars: vec![],
+                names: vec![],
+                bounds: vec![],
+                ty: Type::Prim(PrimType::I32),
+                param_names: vec![],
+                requires: vec![],
+                ensures: vec![],
+                intrinsic: None,
+                visibility,
+            }
+        }
+
+        let mut tc = TypeChecker::new();
+
+        tc.register_overload("foo".to_string(), mk_scheme(ast::Visibility::Open));
+        tc.register_method_overload("i32", "bar", mk_scheme(ast::Visibility::Open));
+
+        assert_eq!(tc.overload_env.get("foo").map(|v| v.len()), Some(1));
+        assert_eq!(
+            tc.method_env
+                .get("i32")
+                .and_then(|m| m.get("bar"))
+                .map(|v| v.len()),
+            Some(1)
+        );
+
+        tc.define_scheme("open_name".to_string(), mk_scheme(ast::Visibility::Open));
+        tc.define_scheme(
+            "hidden_name".to_string(),
+            mk_scheme(ast::Visibility::Hidden),
+        );
+        tc.define_scheme("pkg_name".to_string(), mk_scheme(ast::Visibility::Pkg));
+        tc.define_scheme(
+            "pkg_path_name".to_string(),
+            mk_scheme(ast::Visibility::PkgPath(vec!["core".to_string()])),
+        );
+
+        assert!(tc.resolve_scheme("open_name").is_some());
+        assert!(tc.resolve_scheme("hidden_name").is_some());
+        assert!(tc.resolve_scheme("pkg_name").is_some());
+        assert!(tc.resolve_scheme("pkg_path_name").is_some());
+        assert!(tc.resolve_scheme("missing_name").is_none());
+    }
+
+    #[test]
+    fn test_effect_boundary_masking_helpers_cover_concrete_row_and_var() {
+        let mut tc = TypeChecker::new();
+
+        let masked =
+            tc.apply_effect_boundary(&EffectSet::Concrete(vec![Effect::IO]), &[Effect::IO]);
+        assert_eq!(masked, EffectSet::Concrete(vec![Effect::Pure]));
+
+        let tail = tc.new_effect_var();
+        let row = EffectSet::Row(vec![Effect::IO, Effect::Net], Box::new(tail.clone()));
+        let masked_row = tc.apply_effect_boundary(&row, &[Effect::IO]);
+        match masked_row {
+            EffectSet::Row(vals, _) => assert_eq!(vals, vec![Effect::Net]),
+            other => panic!("expected row result, got {:?}", other),
+        }
+
+        let free_var = tc.new_effect_var();
+        let masked_var = tc.apply_effect_boundary(&free_var, &[Effect::IO]);
+        assert!(matches!(masked_var, EffectSet::Var(_)));
+
+        tc.effect_boundaries
+            .insert("callee".to_string(), vec![Effect::IO]);
+        let callee = ast::Expr::Ident("callee".to_string(), izel_span::Span::dummy());
+        let untouched = ast::Expr::Ident("other".to_string(), izel_span::Span::dummy());
+
+        let bounded =
+            tc.apply_boundaries_for_callee(&callee, &EffectSet::Concrete(vec![Effect::IO]));
+        assert_eq!(bounded, EffectSet::Concrete(vec![Effect::Pure]));
+
+        let unchanged =
+            tc.apply_boundaries_for_callee(&untouched, &EffectSet::Concrete(vec![Effect::IO]));
+        assert_eq!(unchanged, EffectSet::Concrete(vec![Effect::IO]));
+    }
+
+    #[test]
+    fn test_extract_shape_layout_reports_invalid_packed_and_align_forms() {
+        fn attr(name: &str, args: Vec<ast::Expr>) -> ast::Attribute {
+            ast::Attribute {
+                name: name.to_string(),
+                args,
+                span: izel_span::Span::dummy(),
+            }
+        }
+
+        let shape = ast::Shape {
+            name: "Layouted".to_string(),
+            visibility: ast::Visibility::Open,
+            generic_params: vec![],
+            fields: vec![],
+            attributes: vec![
+                attr("packed", vec![ast::Expr::Literal(ast::Literal::Int(1))]),
+                attr("packed", vec![]),
+                attr("packed", vec![]),
+                attr(
+                    "align",
+                    vec![
+                        ast::Expr::Literal(ast::Literal::Int(8)),
+                        ast::Expr::Literal(ast::Literal::Int(16)),
+                    ],
+                ),
+                attr(
+                    "align",
+                    vec![ast::Expr::Literal(ast::Literal::Str("bad".to_string()))],
+                ),
+                attr("align", vec![ast::Expr::Literal(ast::Literal::Int(3))]),
+                attr("align", vec![ast::Expr::Literal(ast::Literal::Int(8))]),
+                attr("align", vec![ast::Expr::Literal(ast::Literal::Int(16))]),
+            ],
+            invariants: vec![],
+            span: izel_span::Span::dummy(),
+        };
+
+        let mut tc = TypeChecker::new();
+        let _layout = tc.extract_shape_layout(&shape);
+
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("invalid #[packed] usage")));
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("declares #[packed] more than once")));
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("invalid #[align(..)] usage")));
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("invalid #[align(..)] value")));
+        assert!(tc.diagnostics.iter().any(|d| d
+            .message
+            .contains("alignment must be a non-zero power of two")));
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("declares #[align(..)] more than once")));
+    }
+
+    fn mk_attr(name: &str, args: Vec<ast::Expr>) -> ast::Attribute {
+        ast::Attribute {
+            name: name.to_string(),
+            args,
+            span: Span::dummy(),
+        }
+    }
+
+    fn mk_forge_decl(name: &str) -> ast::Forge {
+        ast::Forge {
+            name: name.to_string(),
+            name_span: Span::dummy(),
+            visibility: ast::Visibility::Open,
+            is_flow: false,
+            generic_params: vec![],
+            params: vec![],
+            ret_type: ast::Type::Prim("void".to_string()),
+            effects: vec![],
+            attributes: vec![],
+            requires: vec![],
+            ensures: vec![],
+            body: None,
+            span: Span::dummy(),
+        }
+    }
+
+    #[test]
+    fn test_validate_forge_attribute_macros_covers_inline_and_deprecated_variants() {
+        let mut tc = TypeChecker::new();
+
+        let mut inline_path = mk_forge_decl("inline_path");
+        inline_path.attributes = vec![mk_attr(
+            "inline",
+            vec![ast::Expr::Path(
+                vec!["lang".to_string(), "always".to_string()],
+                vec![],
+            )],
+        )];
+        tc.validate_forge_attribute_macros(&inline_path);
+
+        assert_eq!(
+            tc.inline_forges.get("inline_path").cloned(),
+            Some(Some("always".to_string()))
+        );
+
+        let mut inline_bad_arg = mk_forge_decl("inline_bad_arg");
+        inline_bad_arg.attributes = vec![mk_attr(
+            "inline",
+            vec![ast::Expr::Literal(ast::Literal::Int(1))],
+        )];
+        tc.validate_forge_attribute_macros(&inline_bad_arg);
+
+        let mut inline_bad_mode = mk_forge_decl("inline_bad_mode");
+        inline_bad_mode.attributes = vec![mk_attr(
+            "inline",
+            vec![ast::Expr::Ident("sometimes".to_string(), Span::dummy())],
+        )];
+        tc.validate_forge_attribute_macros(&inline_bad_mode);
+
+        let mut deprecated = mk_forge_decl("deprecated_forge");
+        deprecated.attributes = vec![mk_attr(
+            "deprecated",
+            vec![
+                ast::Expr::Literal(ast::Literal::Str("use_new".to_string())),
+                ast::Expr::Ident("legacy".to_string(), Span::dummy()),
+                ast::Expr::Path(vec!["std".to_string(), "old".to_string()], vec![]),
+                ast::Expr::Literal(ast::Literal::Int(7)),
+            ],
+        )];
+        tc.validate_forge_attribute_macros(&deprecated);
+
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("invalid #[inline] argument")));
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("expected always or never")));
+        assert_eq!(
+            tc.deprecated_forges.get("deprecated_forge").cloned(),
+            Some(vec![
+                "use_new".to_string(),
+                "legacy".to_string(),
+                "std::old".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_effect_name_and_effect_set_from_names_cover_variants() {
+        let tc = TypeChecker::new();
+
+        assert_eq!(tc.parse_effect_name("io"), Effect::IO);
+        assert_eq!(tc.parse_effect_name("net"), Effect::Net);
+        assert_eq!(tc.parse_effect_name("alloc"), Effect::Alloc);
+        assert_eq!(tc.parse_effect_name("panic"), Effect::Panic);
+        assert_eq!(tc.parse_effect_name("unsafe"), Effect::Unsafe);
+        assert_eq!(tc.parse_effect_name("time"), Effect::Time);
+        assert_eq!(tc.parse_effect_name("rand"), Effect::Rand);
+        assert_eq!(tc.parse_effect_name("env"), Effect::Env);
+        assert_eq!(tc.parse_effect_name("ffi"), Effect::Ffi);
+        assert_eq!(tc.parse_effect_name("thread"), Effect::Thread);
+        assert_eq!(tc.parse_effect_name("mut"), Effect::Mut);
+        assert_eq!(tc.parse_effect_name("pure"), Effect::Pure);
+        assert_eq!(
+            tc.parse_effect_name("my_custom"),
+            Effect::User("my_custom".to_string())
+        );
+
+        let names = vec![
+            "io".to_string(),
+            "net".to_string(),
+            "alloc".to_string(),
+            "panic".to_string(),
+            "unsafe".to_string(),
+            "time".to_string(),
+            "rand".to_string(),
+            "env".to_string(),
+            "ffi".to_string(),
+            "thread".to_string(),
+            "mut".to_string(),
+            "my_custom".to_string(),
+        ];
+        assert_eq!(
+            tc.effect_set_from_names(&names),
+            EffectSet::Concrete(vec![
+                Effect::IO,
+                Effect::Net,
+                Effect::Alloc,
+                Effect::Panic,
+                Effect::Unsafe,
+                Effect::Time,
+                Effect::Rand,
+                Effect::Env,
+                Effect::Ffi,
+                Effect::Thread,
+                Effect::Mut,
+                Effect::User("my_custom".to_string()),
+            ])
+        );
+
+        let pure = vec!["pure".to_string()];
+        assert_eq!(
+            tc.effect_set_from_names(&pure),
+            EffectSet::Concrete(vec![Effect::Pure])
+        );
+    }
+
+    #[test]
+    fn test_collect_forge_signature_intrinsic_and_check_forge_effect_mismatch() {
+        let mut tc = TypeChecker::new();
+        tc.define(
+            "io_fn".to_string(),
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Prim(PrimType::Void)),
+                effects: EffectSet::Concrete(vec![Effect::IO]),
+            },
+        );
+
+        let mut f = mk_forge_decl("caller");
+        f.attributes = vec![mk_attr(
+            "intrinsic",
+            vec![ast::Expr::Literal(ast::Literal::Str(
+                "ffi.call".to_string(),
+            ))],
+        )];
+        f.body = Some(ast::Block {
+            stmts: vec![ast::Stmt::Expr(ast::Expr::Call(
+                Box::new(ast::Expr::Ident("io_fn".to_string(), Span::dummy())),
+                vec![],
+            ))],
+            expr: None,
+            span: Span::dummy(),
+        });
+
+        let sig = tc.collect_forge_signature(&f);
+        assert_eq!(sig.intrinsic.as_deref(), Some("ffi.call"));
+
+        tc.check_forge(&f);
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Function has effects")));
+    }
+
+    #[test]
+    fn test_check_impl_reports_missing_method_and_extra_effects() {
+        let mut tc = TypeChecker::new();
+
+        let mut expected = mk_forge_decl("required");
+        expected.effects = vec!["pure".to_string()];
+
+        let mut missing = mk_forge_decl("missing");
+        missing.effects = vec!["pure".to_string()];
+
+        tc.weaves.insert(
+            "Worker".to_string(),
+            ast::Weave {
+                name: "Worker".to_string(),
+                visibility: ast::Visibility::Open,
+                parents: vec![],
+                associated_types: vec![],
+                methods: vec![expected.clone(), missing],
+                attributes: vec![],
+                span: Span::dummy(),
+            },
+        );
+
+        let mut impl_method = mk_forge_decl("required");
+        impl_method.effects = vec!["io".to_string()];
+
+        let impl_block = ast::Impl {
+            target: ast::Type::Prim("i32".to_string()),
+            weave: Some(ast::Type::Prim("Worker".to_string())),
+            items: vec![ast::Item::Forge(impl_method)],
+            attributes: vec![],
+            span: Span::dummy(),
+        };
+
+        tc.check_impl(&impl_block);
+
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("introduces effects not declared")));
+        assert!(tc.diagnostics.iter().any(|d| d
+            .message
+            .contains("missing required weave method 'missing'")));
+    }
+
+    #[test]
+    fn test_collect_item_signature_impl_path_target_registers_method_and_error_attr() {
+        let mut tc = TypeChecker::new();
+
+        let method = mk_forge_decl("apply");
+        let item = ast::Item::Impl(ast::Impl {
+            target: ast::Type::Path(vec!["pkg".to_string(), "Thing".to_string()], vec![]),
+            weave: None,
+            items: vec![ast::Item::Forge(method)],
+            attributes: vec![mk_attr("error", vec![])],
+            span: Span::dummy(),
+        });
+
+        tc.collect_item_signature(&item);
+
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("found on impl block")));
+        assert_eq!(
+            tc.method_env
+                .get("Thing")
+                .and_then(|m| m.get("apply"))
+                .map(|v| v.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_check_impl_invariant_branch_and_type_lowering_unify_paths() {
+        let mut tc = TypeChecker::new();
+        tc.shape_invariants.insert(
+            "State".to_string(),
+            vec![ast::Expr::Literal(ast::Literal::Bool(true))],
+        );
+
+        let mut method = mk_forge_decl("touch");
+        method.params = vec![ast::Param {
+            name: "self".to_string(),
+            ty: ast::Type::SelfType,
+            default_value: None,
+            is_variadic: false,
+            span: Span::dummy(),
+        }];
+
+        let impl_block = ast::Impl {
+            target: ast::Type::Prim("State".to_string()),
+            weave: None,
+            items: vec![ast::Item::Forge(method)],
+            attributes: vec![],
+            span: Span::dummy(),
+        };
+        tc.check_impl(&impl_block);
+
+        tc.define("Base".to_string(), Type::Adt(DefId(7)));
+        let lowered_optional = tc.lower_ast_type(&ast::Type::Optional(Box::new(ast::Type::Prim(
+            "i32".to_string(),
+        ))));
+        assert_eq!(
+            lowered_optional,
+            Type::Optional(Box::new(Type::Prim(PrimType::I32)))
+        );
+
+        let lowered_assoc = tc.lower_ast_type(&ast::Type::Path(
+            vec!["Base".to_string(), "Item".to_string()],
+            vec![],
+        ));
+        assert_eq!(
+            lowered_assoc,
+            Type::Assoc(Box::new(Type::Adt(DefId(7))), "Item".to_string())
+        );
+
+        let lowered_fn = tc.lower_ast_type(&ast::Type::Function {
+            params: vec![ast::Type::Prim("i32".to_string())],
+            ret: Box::new(ast::Type::Prim("i32".to_string())),
+            effects: vec!["io".to_string()],
+        });
+        match lowered_fn {
+            Type::Function { effects, .. } => {
+                assert_eq!(effects, EffectSet::Concrete(vec![]));
+            }
+            other => panic!("expected lowered function type, got {:?}", other),
+        }
+
+        let static_a = Type::Static(vec![("x".to_string(), Type::Prim(PrimType::I32))]);
+        let static_b = Type::Static(vec![("x".to_string(), Type::Prim(PrimType::I32))]);
+        assert!(tc.unify(&static_a, &static_b));
+
+        let fn_a = Type::Function {
+            params: vec![Type::Prim(PrimType::I32)],
+            ret: Box::new(Type::Prim(PrimType::I32)),
+            effects: EffectSet::Concrete(vec![Effect::Pure]),
+        };
+        let fn_b = Type::Function {
+            params: vec![Type::Prim(PrimType::I32)],
+            ret: Box::new(Type::Prim(PrimType::I32)),
+            effects: EffectSet::Concrete(vec![Effect::Pure]),
+        };
+        assert!(tc.unify(&fn_a, &fn_b));
+
+        assert!(tc.unify(
+            &Type::Prim(PrimType::None),
+            &Type::Optional(Box::new(Type::Prim(PrimType::I32)))
+        ));
+        assert!(tc.unify(
+            &Type::Cascade(Box::new(Type::Prim(PrimType::I32))),
+            &Type::Optional(Box::new(Type::Prim(PrimType::I32)))
+        ));
+    }
+
+    #[test]
+    fn test_resolve_binary_op_trait_lookup_and_missing_impl_diagnostic() {
+        let mut tc = TypeChecker::new();
+
+        let mut add_forge = mk_forge_decl("add");
+        add_forge.ret_type = ast::Type::Prim("i32".to_string());
+
+        let add_impl = ast::Impl {
+            target: ast::Type::Prim("Boxed".to_string()),
+            weave: Some(ast::Type::Prim("MyAdd".to_string())),
+            items: vec![ast::Item::Forge(add_forge)],
+            attributes: vec![],
+            span: Span::dummy(),
+        };
+
+        tc.trait_impls
+            .insert("MyAdd".to_string(), vec![(Type::Adt(DefId(99)), add_impl)]);
+
+        let resolved =
+            tc.resolve_binary_op(Type::Adt(DefId(99)), Type::Adt(DefId(99)), "MyAdd", "add");
+        assert_eq!(resolved, Type::Prim(PrimType::I32));
+
+        let missing = tc.resolve_binary_op(
+            Type::Adt(DefId(123)),
+            Type::Adt(DefId(123)),
+            "MissingWeave",
+            "add",
+        );
+        assert_eq!(missing, Type::Error);
+        assert!(tc
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Cannot find implementation")));
+    }
 }
