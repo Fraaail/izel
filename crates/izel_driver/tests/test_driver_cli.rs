@@ -46,6 +46,30 @@ fn cli_fmt_subcommand_formats_source_file() {
 }
 
 #[test]
+fn cli_fmt_subcommand_reports_missing_file_error() {
+    let mut missing = std::env::temp_dir();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after UNIX epoch")
+        .as_nanos();
+    missing.push(format!("izel-driver-missing-{}.iz", nonce));
+    let missing_arg = missing.to_string_lossy().to_string();
+
+    let output = run_izelc(&["fmt", &missing_arg]);
+
+    assert!(!output.status.success(), "fmt should fail for missing file");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("No such file") || combined.contains("os error"),
+        "missing-file error was not surfaced: {combined}"
+    );
+}
+
+#[test]
 fn cli_deps_subcommand_loads_manifest() {
     let manifest = temp_file(
         "toml",
@@ -72,6 +96,58 @@ version = "0.1.0"
 }
 
 #[test]
+fn cli_deps_subcommand_fails_for_missing_manifest() {
+    let mut missing = std::env::temp_dir();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after UNIX epoch")
+        .as_nanos();
+    missing.push(format!("izel-driver-missing-{}.toml", nonce));
+    let missing_arg = missing.to_string_lossy().to_string();
+
+    let output = run_izelc(&["deps", &missing_arg]);
+
+    assert!(
+        !output.status.success(),
+        "deps should fail for missing manifest path"
+    );
+}
+
+#[test]
+fn cli_deps_subcommand_fails_for_invalid_manifest() {
+    let manifest = temp_file(
+        "toml",
+        r#"[package]
+name = "broken"
+version =
+"#,
+    );
+    let manifest_arg = manifest.to_string_lossy().to_string();
+
+    let output = run_izelc(&["deps", &manifest_arg]);
+    let _ = fs::remove_file(&manifest);
+
+    assert!(
+        !output.status.success(),
+        "deps should fail for malformed manifest"
+    );
+
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("failed")
+            || combined.contains("Failed")
+            || combined.contains("error")
+            || combined.contains("Error")
+            || combined.contains("invalid"),
+        "invalid-manifest error was not surfaced: {combined}"
+    );
+}
+
+#[test]
 fn cli_compile_path_emits_llvm_ir_for_valid_source() {
     let input = temp_file("iz", "forge main() { give 0 }");
     let input_arg = input.to_string_lossy().to_string();
@@ -89,6 +165,25 @@ fn cli_compile_path_emits_llvm_ir_for_valid_source() {
     assert!(stdout.contains("Type checking..."));
     assert!(stdout.contains("Generating LLVM IR..."));
     assert!(stdout.contains("--- LLVM IR ---"));
+}
+
+#[test]
+fn cli_compile_with_run_flag_executes_jit_path() {
+    let input = temp_file("iz", "forge main() { give 0 }");
+    let input_arg = input.to_string_lossy().to_string();
+
+    let output = run_izelc(&["--run", &input_arg]);
+    let _ = fs::remove_file(&input);
+
+    assert!(
+        output.status.success(),
+        "compile+run command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--- JIT Execution ---"));
+    assert!(stdout.contains("JIT Exit Code:"));
 }
 
 #[test]
