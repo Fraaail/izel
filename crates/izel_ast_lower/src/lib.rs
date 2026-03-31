@@ -2247,6 +2247,14 @@ mod tests {
         parser.parse_expr(izel_parser::expr::Precedence::None)
     }
 
+    fn mk_span(lo: u32, hi: u32) -> Span {
+        Span::new(BytePos(lo), BytePos(hi), SourceId(0))
+    }
+
+    fn mk_token(kind: TokenKind, lo: u32, hi: u32) -> Token {
+        Token::new(kind, mk_span(lo, hi))
+    }
+
     #[test]
     fn test_lower_attributes() {
         let source = "@proof forge f() {}";
@@ -3412,5 +3420,598 @@ mod tests {
         for expr in samples {
             let _ = lowerer.substitute_expr(&expr, &subst);
         }
+    }
+
+    #[test]
+    fn test_manual_lower_pattern_and_expr_edge_paths() {
+        let lowerer = Lowerer::new("ab");
+
+        let pat_a = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+        );
+        let pat_b = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+        );
+
+        let or_node = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![
+                SyntaxElement::Node(pat_a.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::Pipe, 0, 0)),
+                SyntaxElement::Node(pat_b.clone()),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_pattern(&or_node),
+            ast::Pattern::Or(parts) if parts.len() == 2
+        ));
+
+        let struct_like = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::OpenBrace, 0, 0))],
+        );
+        assert!(matches!(
+            lowerer.lower_pattern(&struct_like),
+            ast::Pattern::Struct { .. }
+        ));
+
+        let wildcard_like = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Comma, 0, 0))],
+        );
+        assert!(matches!(
+            lowerer.lower_pattern(&wildcard_like),
+            ast::Pattern::Wildcard
+        ));
+
+        let str_lowerer = Lowerer::new("\"s\"");
+        let str_node = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(
+                TokenKind::Str { terminated: true },
+                0,
+                3,
+            ))],
+        );
+        assert!(matches!(
+            str_lowerer.lower_expr(&str_node),
+            ast::Expr::Literal(ast::Literal::Str(_))
+        ));
+
+        let true_lowerer = Lowerer::new("true");
+        let true_node = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(TokenKind::True, 0, 4))],
+        );
+        assert!(matches!(
+            true_lowerer.lower_expr(&true_node),
+            ast::Expr::Literal(ast::Literal::Bool(true))
+        ));
+
+        let false_lowerer = Lowerer::new("false");
+        let false_node = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(TokenKind::False, 0, 5))],
+        );
+        assert!(matches!(
+            false_lowerer.lower_expr(&false_node),
+            ast::Expr::Literal(ast::Literal::Bool(false))
+        ));
+
+        let nil_lowerer = Lowerer::new("nil");
+        let nil_node = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Nil, 0, 3))],
+        );
+        assert!(matches!(
+            nil_lowerer.lower_expr(&nil_node),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let unknown_lowerer = Lowerer::new("x");
+        let unknown_node = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Unknown, 0, 1))],
+        );
+        assert!(matches!(
+            unknown_lowerer.lower_expr(&unknown_node),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let expr_lowerer = Lowerer::new("ab");
+        let ident_a = SyntaxNode::new(
+            NodeKind::Ident,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+        );
+        let ident_b = SyntaxNode::new(
+            NodeKind::Ident,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+        );
+
+        let binary_or = SyntaxNode::new(
+            NodeKind::BinaryExpr,
+            vec![
+                SyntaxElement::Node(ident_a.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::Or, 0, 0)),
+                SyntaxElement::Node(ident_b.clone()),
+            ],
+        );
+        assert!(matches!(
+            expr_lowerer.lower_expr(&binary_or),
+            ast::Expr::Binary(ast::BinaryOp::Or, _, _)
+        ));
+
+        let unary_not = SyntaxNode::new(
+            NodeKind::UnaryExpr,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Not, 0, 0)),
+                SyntaxElement::Node(ident_a.clone()),
+            ],
+        );
+        assert!(matches!(
+            expr_lowerer.lower_expr(&unary_not),
+            ast::Expr::Unary(ast::UnaryOp::Not, _)
+        ));
+
+        let unary_bitnot = SyntaxNode::new(
+            NodeKind::UnaryExpr,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Tilde, 0, 0)),
+                SyntaxElement::Node(ident_a.clone()),
+            ],
+        );
+        assert!(matches!(
+            expr_lowerer.lower_expr(&unary_bitnot),
+            ast::Expr::Unary(ast::UnaryOp::BitNot, _)
+        ));
+
+        let call_lowerer = Lowerer::new("fx");
+        let call_node = SyntaxNode::new(
+            NodeKind::CallExpr,
+            vec![
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+                )),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+                )),
+            ],
+        );
+        let lowered_call = call_lowerer.lower_expr(&call_node);
+        assert!(matches!(lowered_call, ast::Expr::Call(_, _)));
+        if let ast::Expr::Call(_, args) = lowered_call {
+            assert_eq!(args.len(), 1);
+            assert!(args[0].label.is_none());
+        }
+    }
+
+    #[test]
+    fn test_manual_lower_param_variant_weave_and_impl_paths() {
+        let lowerer = Lowerer::new("1argTUVW");
+
+        let type_t = SyntaxNode::new(
+            NodeKind::Type,
+            vec![SyntaxElement::Node(SyntaxNode::new(
+                NodeKind::Ident,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 4, 5))],
+            ))],
+        );
+        let default_expr = SyntaxNode::new(
+            NodeKind::Literal,
+            vec![SyntaxElement::Token(mk_token(
+                TokenKind::Int {
+                    base: izel_lexer::Base::Decimal,
+                    empty_int: false,
+                },
+                0,
+                1,
+            ))],
+        );
+        let param_node = SyntaxNode::new(
+            NodeKind::ParamPart,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::DotDot, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 4)),
+                SyntaxElement::Node(type_t.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::Equal, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::Comma, 0, 0)),
+                SyntaxElement::Node(default_expr),
+            ],
+        );
+        let lowered_param = lowerer.lower_param(&param_node);
+        assert!(lowered_param.is_variadic);
+        assert!(lowered_param.default_value.is_some());
+
+        let field_type = SyntaxNode::new(
+            NodeKind::Type,
+            vec![SyntaxElement::Node(SyntaxNode::new(
+                NodeKind::Ident,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 5, 6))],
+            ))],
+        );
+        let field_node = SyntaxNode::new(
+            NodeKind::Field,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 6, 7)),
+                SyntaxElement::Node(field_type),
+            ],
+        );
+        let variant_node = SyntaxNode::new(
+            NodeKind::Variant,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 7, 8)),
+                SyntaxElement::Node(field_node),
+            ],
+        );
+        let variant = lowerer.lower_variant(&variant_node);
+        assert!(matches!(variant.fields, Some(ref f) if f.len() == 1));
+
+        let weave_lowerer = Lowerer::new("ABCD");
+        let type_a = SyntaxNode::new(
+            NodeKind::Type,
+            vec![SyntaxElement::Node(SyntaxNode::new(
+                NodeKind::Ident,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+            ))],
+        );
+        let type_b = SyntaxNode::new(
+            NodeKind::Type,
+            vec![SyntaxElement::Node(SyntaxNode::new(
+                NodeKind::Ident,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+            ))],
+        );
+
+        let weave_from_token = SyntaxNode::new(
+            NodeKind::WeaveDecl,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+                SyntaxElement::Token(mk_token(TokenKind::Colon, 0, 0)),
+                SyntaxElement::Node(type_b.clone()),
+            ],
+        );
+        let lowered_weave_token = weave_lowerer.lower_weave(&weave_from_token);
+        assert_eq!(lowered_weave_token.name, "A");
+        assert_eq!(lowered_weave_token.parents.len(), 1);
+
+        let weave_from_type = SyntaxNode::new(
+            NodeKind::WeaveDecl,
+            vec![
+                SyntaxElement::Node(type_a.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::Colon, 0, 0)),
+                SyntaxElement::Node(type_b.clone()),
+            ],
+        );
+        let lowered_weave_type = weave_lowerer.lower_weave(&weave_from_type);
+        assert_eq!(lowered_weave_type.name, "A");
+        assert_eq!(lowered_weave_type.parents.len(), 1);
+
+        let impl_from_types = SyntaxNode::new(
+            NodeKind::ImplBlock,
+            vec![
+                SyntaxElement::Node(type_a.clone()),
+                SyntaxElement::Node(type_b.clone()),
+            ],
+        );
+        let lowered_impl_types = weave_lowerer.lower_impl(&impl_from_types);
+        assert!(lowered_impl_types.weave.is_none());
+        assert!(matches!(lowered_impl_types.target, ast::Type::Prim(ref n) if n == "A"));
+
+        let impl_from_tokens = SyntaxNode::new(
+            NodeKind::ImplBlock,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 2, 3)),
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 3, 4)),
+            ],
+        );
+        let lowered_impl_tokens = weave_lowerer.lower_impl(&impl_from_tokens);
+        assert!(lowered_impl_tokens.weave.is_none());
+        assert!(matches!(lowered_impl_tokens.target, ast::Type::Prim(ref n) if n == "C"));
+    }
+
+    #[test]
+    fn test_manual_lower_misc_branch_paths() {
+        let source = "abcdef";
+        let lowerer = Lowerer::new(source);
+
+        let attr = SyntaxNode::new(
+            NodeKind::Attribute,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::At, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+            ],
+        );
+        let attrs = SyntaxNode::new(
+            NodeKind::Attributes,
+            vec![SyntaxElement::Node(attr.clone())],
+        );
+
+        let echo_node =
+            SyntaxNode::new(NodeKind::EchoDecl, vec![SyntaxElement::Node(attr.clone())]);
+        let echo = lowerer.lower_echo(&echo_node);
+        assert_eq!(echo.attributes.len(), 1);
+
+        let bridge_node = SyntaxNode::new(
+            NodeKind::BridgeDecl,
+            vec![
+                SyntaxElement::Node(attr.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::Str { terminated: true }, 0, 1)),
+            ],
+        );
+        let bridge = lowerer.lower_bridge(&bridge_node);
+        assert_eq!(bridge.attributes.len(), 1);
+
+        let visibility_node = SyntaxNode::new(
+            NodeKind::ForgeDecl,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Pkg, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::OpenParen, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+                SyntaxElement::Token(mk_token(TokenKind::CloseParen, 0, 0)),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_visibility(&visibility_node),
+            ast::Visibility::PkgPath(ref p) if p == &vec!["a".to_string()]
+        ));
+
+        let arg_with_label = SyntaxNode::new(
+            NodeKind::Arg,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+                SyntaxElement::Token(mk_token(TokenKind::Whitespace, 0, 0)),
+                SyntaxElement::Token(mk_token(TokenKind::Colon, 0, 0)),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+                )),
+            ],
+        );
+        let lowered_arg = lowerer.lower_arg(&arg_with_label);
+        assert_eq!(lowered_arg.label.as_deref(), Some("a"));
+
+        let arg_ident_only = SyntaxNode::new(
+            NodeKind::Arg,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 2, 3))],
+        );
+        let lowered_ident_only = lowerer.lower_arg(&arg_ident_only);
+        assert!(matches!(
+            lowered_ident_only.value,
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let empty_expr_stmt = SyntaxNode::new(
+            NodeKind::ExprStmt,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Semicolon, 0, 0))],
+        );
+        let block = SyntaxNode::new(
+            NodeKind::Block,
+            vec![SyntaxElement::Node(empty_expr_stmt.clone())],
+        );
+        let lowered_block = lowerer.lower_block(&block);
+        assert!(matches!(
+            lowered_block.expr.as_deref(),
+            Some(ast::Expr::Literal(ast::Literal::Nil))
+        ));
+
+        assert!(matches!(
+            lowerer.lower_stmt(&empty_expr_stmt),
+            ast::Stmt::Expr(ast::Expr::Literal(ast::Literal::Nil))
+        ));
+        assert!(matches!(
+            lowerer.lower_stmt(&SyntaxNode::new(
+                NodeKind::Arg,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Comma, 0, 0))],
+            )),
+            ast::Stmt::Expr(ast::Expr::Literal(ast::Literal::Nil))
+        ));
+
+        let tilde_without_name = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Tilde, 0, 0))],
+        );
+        assert!(matches!(
+            lowerer.lower_pattern(&tilde_without_name),
+            ast::Pattern::Wildcard
+        ));
+
+        let str_pattern_lowerer = Lowerer::new("\"x\"");
+        let str_pattern = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(
+                TokenKind::Str { terminated: true },
+                0,
+                3,
+            ))],
+        );
+        assert!(matches!(
+            str_pattern_lowerer.lower_pattern(&str_pattern),
+            ast::Pattern::Literal(ast::Literal::Str(_))
+        ));
+
+        let bool_pattern_lowerer = Lowerer::new("true");
+        let true_pattern = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::True, 0, 4))],
+        );
+        assert!(matches!(
+            bool_pattern_lowerer.lower_pattern(&true_pattern),
+            ast::Pattern::Literal(ast::Literal::Bool(true))
+        ));
+
+        let false_pattern_lowerer = Lowerer::new("false");
+        let false_pattern = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::False, 0, 5))],
+        );
+        assert!(matches!(
+            false_pattern_lowerer.lower_pattern(&false_pattern),
+            ast::Pattern::Literal(ast::Literal::Bool(false))
+        ));
+
+        let nil_pattern_lowerer = Lowerer::new("nil");
+        let nil_pattern = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Nil, 0, 3))],
+        );
+        assert!(matches!(
+            nil_pattern_lowerer.lower_pattern(&nil_pattern),
+            ast::Pattern::Literal(ast::Literal::Nil)
+        ));
+
+        let nested_pat = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+        );
+        let variant_pattern = SyntaxNode::new(
+            NodeKind::Pattern,
+            vec![
+                SyntaxElement::Node(nested_pat.clone()),
+                SyntaxElement::Token(mk_token(TokenKind::OpenParen, 0, 0)),
+                SyntaxElement::Node(nested_pat),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_pattern(&variant_pattern),
+            ast::Pattern::Variant(_, args) if args.len() == 2
+        ));
+
+        let generic_arg_node = SyntaxNode::new(
+            NodeKind::GenericArg,
+            vec![SyntaxElement::Node(SyntaxNode::new(
+                NodeKind::Ident,
+                vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+            ))],
+        );
+        let generic_args_node = SyntaxNode::new(
+            NodeKind::GenericArgs,
+            vec![SyntaxElement::Node(generic_arg_node)],
+        );
+        let type_path_node = SyntaxNode::new(
+            NodeKind::Type,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2)),
+                SyntaxElement::Node(generic_args_node.clone()),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_type_path(&type_path_node),
+            ast::Type::Path(path, args) if path == vec!["b".to_string()] && args.len() == 1
+        ));
+        assert!(matches!(
+            lowerer.lower_element_type(&SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))),
+            ast::Type::Error
+        ));
+
+        let ident_fallback = SyntaxNode::new(
+            NodeKind::Ident,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Plus, 0, 0))],
+        );
+        assert!(matches!(
+            lowerer.lower_expr(&ident_fallback),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let paren_fallback = SyntaxNode::new(NodeKind::ParenExpr, vec![]);
+        assert!(matches!(
+            lowerer.lower_expr(&paren_fallback),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let binary_too_short = SyntaxNode::new(
+            NodeKind::BinaryExpr,
+            vec![SyntaxElement::Token(mk_token(TokenKind::Whitespace, 0, 0))],
+        );
+        assert!(matches!(
+            lowerer.lower_expr(&binary_too_short),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let binary_invalid_op = SyntaxNode::new(
+            NodeKind::BinaryExpr,
+            vec![
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+                )),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+                )),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 2, 3))],
+                )),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_expr(&binary_invalid_op),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let raw_without_inner = SyntaxNode::new(NodeKind::RawExpr, vec![]);
+        assert!(matches!(
+            lowerer.lower_expr(&raw_without_inner),
+            ast::Expr::Literal(ast::Literal::Nil)
+        ));
+
+        let path_expr_with_generics = SyntaxNode::new(
+            NodeKind::PathExpr,
+            vec![
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Ident,
+                    vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1))],
+                )),
+                SyntaxElement::Node(generic_args_node),
+            ],
+        );
+        assert!(matches!(
+            lowerer.lower_expr(&path_expr_with_generics),
+            ast::Expr::Path(path, args) if path == vec!["a".to_string()] && args.len() == 1
+        ));
+
+        let macro_call = SyntaxNode::new(
+            NodeKind::MacroCall,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+                SyntaxElement::Node(SyntaxNode::new(
+                    NodeKind::Arg,
+                    vec![SyntaxElement::Node(SyntaxNode::new(
+                        NodeKind::Ident,
+                        vec![SyntaxElement::Token(mk_token(TokenKind::Ident, 1, 2))],
+                    ))],
+                )),
+            ],
+        );
+        let (macro_name, macro_args) = lowerer.lower_macro_call(&macro_call);
+        assert_eq!(macro_name, "a");
+        assert_eq!(macro_args.len(), 1);
+
+        let alias_node = SyntaxNode::new(
+            NodeKind::TypeAlias,
+            vec![
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+                SyntaxElement::Node(type_path_node),
+            ],
+        );
+        let alias = lowerer.lower_alias(&alias_node);
+        assert!(matches!(alias.ty, ast::Type::Path(_, _)));
+
+        let impl_node_with_attrs = SyntaxNode::new(
+            NodeKind::ImplBlock,
+            vec![
+                SyntaxElement::Node(attrs),
+                SyntaxElement::Token(mk_token(TokenKind::Ident, 0, 1)),
+            ],
+        );
+        let lowered_impl = lowerer.lower_impl(&impl_node_with_attrs);
+        assert!(!lowered_impl.attributes.is_empty());
+
+        let effect_empty = lowerer.lower_effect(&SyntaxNode::new(NodeKind::Effect, vec![]));
+        assert!(effect_empty.is_empty());
     }
 }

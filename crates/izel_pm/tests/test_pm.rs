@@ -1,4 +1,7 @@
-use izel_pm::{build_download_url, parse_manifest, resolve_dependencies_with_registry, Dependency};
+use izel_pm::{
+    build_download_url, parse_manifest, resolve_dependencies, resolve_dependencies_with_registry,
+    Dependency,
+};
 use std::collections::HashMap;
 
 #[test]
@@ -47,6 +50,14 @@ fn resolve_dependencies_collects_registry_downloads() {
 }
 
 #[test]
+fn resolve_dependencies_wrapper_uses_default_registry() {
+    let mut deps = HashMap::new();
+    deps.insert("std".to_string(), Dependency::Version("1.0.0".to_string()));
+
+    resolve_dependencies(&deps).expect("default-registry resolution should succeed");
+}
+
+#[test]
 fn resolve_dependencies_skips_path_deps_for_downloads() {
     let registry = parse_manifest(include_str!("../../../Izel.toml"))
         .expect("workspace manifest should parse")
@@ -64,4 +75,36 @@ fn resolve_dependencies_skips_path_deps_for_downloads() {
 
     assert_eq!(resolved.len(), 1);
     assert!(resolved[0].contains("/std/1.0.0"));
+}
+
+#[test]
+fn parse_manifest_reports_parse_error_for_invalid_input() {
+    let invalid = "[package\nname = \"demo\"";
+    let err = parse_manifest(invalid).expect_err("invalid manifest should fail");
+    assert!(err.contains("Failed to parse manifest"));
+}
+
+#[test]
+fn parse_manifest_ignores_unknown_sections_and_preserves_defaults() {
+    let input = r#"
+[package]
+name = "demo"
+version = "0.1.0"
+
+[custom]
+feature = "on"
+"#;
+
+    let manifest = parse_manifest(input).expect("manifest parse should succeed");
+    assert_eq!(manifest.package.name, "demo");
+    assert_eq!(manifest.package.version, "0.1.0");
+    assert_eq!(manifest.registry.index, "https://registry.izel.dev/index");
+}
+
+#[test]
+fn parse_manifest_accepts_whitespace_only_input() {
+    let manifest = parse_manifest("  \n\n   ").expect("whitespace input should parse");
+    assert!(manifest.package.name.is_empty());
+    assert!(manifest.package.version.is_empty());
+    assert!(manifest.dependencies.is_empty());
 }

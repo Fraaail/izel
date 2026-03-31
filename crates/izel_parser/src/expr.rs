@@ -493,4 +493,44 @@ mod tests {
         let node = parse_test_expr("here!()", Precedence::None);
         assert_eq!(node.kind, NodeKind::MacroCall);
     }
+
+    #[test]
+    fn test_precedence_maps_bitwise_tokens() {
+        assert_eq!(Precedence::from_kind(TokenKind::Caret), Precedence::BitXor);
+        assert_eq!(
+            Precedence::from_kind(TokenKind::Ampersand),
+            Precedence::BitAnd
+        );
+    }
+
+    #[test]
+    fn test_parse_macro_call_with_whitespace_and_bracket_args() {
+        let node = parse_test_expr("here ! [x, y]", Precedence::None);
+        assert_eq!(node.kind, NodeKind::MacroCall);
+
+        let arg_count = node
+            .children
+            .iter()
+            .filter(|child| matches!(child, SyntaxElement::Node(n) if n.kind == NodeKind::Arg))
+            .count();
+        assert_eq!(arg_count, 2);
+    }
+
+    #[test]
+    fn test_parse_ident_bang_without_macro_invocation() {
+        let node = parse_test_expr("here!oops", Precedence::None);
+        assert_eq!(node.kind, NodeKind::CascadeExpr);
+    }
+
+    #[test]
+    fn test_parse_call_named_arg_path_and_struct_literal() {
+        let call = parse_test_expr("f(label: 1, 2)", Precedence::None);
+        assert_eq!(call.kind, NodeKind::CallExpr);
+
+        let path = parse_test_expr("pkg::item", Precedence::None);
+        assert_eq!(path.kind, NodeKind::PathExpr);
+
+        let struct_lit = parse_test_expr("Point { x: 1, y: 2 }", Precedence::None);
+        assert_eq!(struct_lit.kind, NodeKind::StructLiteral);
+    }
 }

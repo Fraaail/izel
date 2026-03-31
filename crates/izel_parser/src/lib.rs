@@ -1327,19 +1327,59 @@ mod tests {
     use super::*;
     use izel_lexer::Lexer;
 
-    fn parse_test(src: &str) -> SyntaxNode {
+    fn parser_from(src: &str) -> Parser {
         let mut lexer = Lexer::new(src, izel_span::SourceId(0));
         let mut tokens = Vec::new();
         loop {
             let t = lexer.next_token();
-            if t.kind == TokenKind::Eof {
-                tokens.push(t);
+            let kind = t.kind;
+            tokens.push(t);
+            if kind == TokenKind::Eof {
                 break;
             }
-            tokens.push(t);
         }
-        let mut parser = Parser::new(tokens, src.to_string());
+        Parser::new(tokens, src.to_string())
+    }
+
+    fn parse_test(src: &str) -> SyntaxNode {
+        let mut parser = parser_from(src);
         parser.parse_decl()
+    }
+
+    fn parse_source_test(src: &str) -> SyntaxNode {
+        let mut parser = parser_from(src);
+        parser.parse_source_file()
+    }
+
+    fn parse_pattern_test(src: &str) -> SyntaxNode {
+        let mut parser = parser_from(src);
+        parser.parse_pattern()
+    }
+
+    fn parse_type_test(src: &str) -> SyntaxNode {
+        let mut parser = parser_from(src);
+        parser.parse_type()
+    }
+
+    fn contains_kind(node: &SyntaxNode, needle: NodeKind) -> bool {
+        if node.kind == needle {
+            return true;
+        }
+
+        node.children.iter().any(|child| match child {
+            SyntaxElement::Node(n) => contains_kind(n, needle),
+            SyntaxElement::Token(_) => false,
+        })
+    }
+
+    fn count_kind(node: &SyntaxNode, needle: NodeKind) -> usize {
+        let mut total = usize::from(node.kind == needle);
+        for child in &node.children {
+            if let SyntaxElement::Node(n) = child {
+                total += count_kind(n, needle);
+            }
+        }
+        total
     }
 
     #[test]
@@ -1355,18 +1395,8 @@ mod tests {
         assert_eq!(node.kind, NodeKind::ForgeDecl);
 
         let has_attr = node.children.iter().any(|child| {
-            if let SyntaxElement::Node(n) = child {
-                n.kind == NodeKind::Attributes
-                    && n.children.iter().any(|attr_child| {
-                        if let SyntaxElement::Node(an) = attr_child {
-                            an.kind == NodeKind::Attribute
-                        } else {
-                            false
-                        }
-                    })
-            } else {
-                false
-            }
+            matches!(child, SyntaxElement::Node(n) if n.kind == NodeKind::Attributes
+                && n.children.iter().any(|attr_child| matches!(attr_child, SyntaxElement::Node(an) if an.kind == NodeKind::Attribute)))
         });
         assert!(has_attr, "Should have Attribute node");
     }
@@ -1381,5 +1411,198 @@ mod tests {
                 .any(|c| matches!(c, SyntaxElement::Node(n) if n.kind == NodeKind::Block)),
             "macro declaration should contain a body block"
         );
+    }
+
+    #[test]
+    fn test_parse_decl_with_pkg_modifier_generic_effects_and_block() {
+        let node =
+            parse_test("pkg(core::io) forge run<T: Trait>(~self, ..args: i32 = 1) { give 0 }");
+        assert_eq!(node.kind, NodeKind::ForgeDecl);
+        assert!(contains_kind(&node, NodeKind::GenericParams));
+        assert!(contains_kind(&node, NodeKind::ParamPart));
+        assert!(contains_kind(&node, NodeKind::Block));
+    }
+
+    #[test]
+    fn test_parse_pattern_forms_cover_core_branches() {
+        for src in [
+            "~name",
+            "(left, right)",
+            "[head, ..tail]",
+            "Point::Wrap { x, y }",
+            "Some(value)",
+            "1 | 2",
+            "nil",
+        ] {
+            let node = parse_pattern_test(src);
+            assert_eq!(node.kind, NodeKind::Pattern);
+        }
+    }
+
+    #[test]
+    fn test_parse_type_forms_cover_pointer_optional_raw_and_generic_args() {
+        assert_eq!(parse_type_test("*~i32").kind, NodeKind::PointerType);
+        assert_eq!(parse_type_test("?i32").kind, NodeKind::OptionalType);
+        assert_eq!(parse_type_test("raw { give 1 }").kind, NodeKind::RawExpr);
+
+        let generic = parse_type_test("Result<i32, str>");
+        assert!(contains_kind(&generic, NodeKind::GenericArgs));
+    }
+
+    #[test]
+    fn test_parse_source_covers_shape_impl_weave_dual_ward_draw_and_bind() {
+        let root = parse_source_test(
+            r#"
+shape impl Widget { forge draw(self) { give } }
+dual Codec { forge encode(self) { give } }
+weave Renderable: Debug + Display { forge render(self) { give } }
+weave Renderable for Widget { forge render(self) { give } }
+ward Core { forge helper() { let f = bind |x, y| x + y; give 0 } }
+draw std/io::*;
+"#,
+        );
+
+        assert_eq!(root.kind, NodeKind::SourceFile);
+        assert!(contains_kind(&root, NodeKind::ImplBlock));
+        assert!(contains_kind(&root, NodeKind::DualDecl));
+        assert!(contains_kind(&root, NodeKind::WeaveDecl));
+        assert!(contains_kind(&root, NodeKind::WardDecl));
+        assert!(contains_kind(&root, NodeKind::DrawDecl));
+        assert!(contains_kind(&root, NodeKind::BindExpr));
+    }
+
+    #[test]
+    fn test_parse_decl_accepts_stacked_at_and_bracket_attributes() {
+        let node = parse_test("@intrinsic(\"x\", 1) #[bench] forge f() { give }");
+        assert_eq!(node.kind, NodeKind::ForgeDecl);
+        assert!(contains_kind(&node, NodeKind::Attributes));
+        assert!(count_kind(&node, NodeKind::Attribute) >= 2);
+    }
+
+    #[test]
+    fn test_bump_returns_synthetic_eof_when_token_stream_is_empty() {
+        let mut parser = Parser::new(vec![], String::new());
+        let token = parser.bump();
+
+        assert_eq!(token.kind, TokenKind::Eof);
+        assert_eq!(parser.pos, 0);
+    }
+
+    #[test]
+    fn test_parse_source_file_recovers_from_unexpected_token() {
+        let root = parse_source_test("}");
+        assert_eq!(root.kind, NodeKind::SourceFile);
+    }
+
+    #[test]
+    fn test_parse_pkg_modifier_and_macro_bracket_forms_recovery() {
+        let malformed_pkg = parse_test("pkg(,) forge main() { give 0 }");
+        assert_eq!(malformed_pkg.kind, NodeKind::ExprStmt);
+
+        let bracket_macro = parse_test("macro demo![x, y]");
+        assert_eq!(bracket_macro.kind, NodeKind::MacroDecl);
+    }
+
+    #[test]
+    fn test_parse_scroll_variants_cover_visibility_and_unterminated_payload_paths() {
+        let with_struct_payload = parse_test("scroll Event { open hidden pkg Data { code: i32 ");
+        assert_eq!(with_struct_payload.kind, NodeKind::ScrollDecl);
+
+        let with_tuple_payload = parse_test("scroll Event { Data(i32 ");
+        assert_eq!(with_tuple_payload.kind, NodeKind::ScrollDecl);
+    }
+
+    #[test]
+    fn test_parse_control_flow_helpers_cover_branch_given_loop_while_each_and_block_stmt_paths() {
+        let mut given = parser_from("cond { give 1 } else given other { give 2 }");
+        assert_eq!(given.parse_given_expr(vec![]).kind, NodeKind::GivenExpr);
+
+        let mut branch = parser_from("value { ) _ given cond => 1, _ => 0 }");
+        assert_eq!(branch.parse_branch_expr(vec![]).kind, NodeKind::BranchExpr);
+
+        let mut while_expr = parser_from("cond { give 1 }");
+        assert_eq!(
+            while_expr.parse_while_expr(vec![]).kind,
+            NodeKind::WhileExpr
+        );
+
+        let mut each_expr = parser_from("item in items { give item }");
+        assert_eq!(each_expr.parse_each_expr(vec![]).kind, NodeKind::EachExpr);
+
+        let mut loop_expr = parser_from("{ give 0 }");
+        assert_eq!(loop_expr.parse_loop_expr(vec![]).kind, NodeKind::LoopExpr);
+
+        let mut give_stmt = parser_from("give 1;");
+        assert_eq!(give_stmt.parse_stmt().kind, NodeKind::GiveStmt);
+
+        let mut block_stmt = parser_from("{ give 1 }");
+        assert_eq!(block_stmt.parse_stmt().kind, NodeKind::Block);
+
+        let mut malformed_block = parser_from("{ ) }");
+        assert_eq!(malformed_block.parse_block().kind, NodeKind::Block);
+    }
+
+    #[test]
+    fn test_parse_attribute_default_branch_direct_call() {
+        let mut parser = parser_from("forge");
+        let attr = parser.parse_attribute();
+        assert_eq!(attr.kind, NodeKind::Attribute);
+    }
+
+    #[test]
+    fn test_parse_macro_and_bridge_variants_cover_uncommon_paths() {
+        let macro_bracket = parse_test("macro demo![..args, value]");
+        assert_eq!(macro_bracket.kind, NodeKind::MacroDecl);
+
+        let bridge_without_body = parse_test("bridge \"c\"");
+        assert_eq!(bridge_without_body.kind, NodeKind::BridgeDecl);
+    }
+
+    #[test]
+    fn test_parse_pattern_pipe_token_scroll_recovery_and_type_postfix_bang() {
+        let tuple_variant = parse_pattern_test("Some(x, y)");
+        assert_eq!(tuple_variant.kind, NodeKind::Pattern);
+
+        // `|>` is lexed as `Pipe`, which is what `parse_pattern` currently checks.
+        let pipe_pattern = parse_pattern_test("left |> right");
+        assert_eq!(pipe_pattern.kind, NodeKind::Pattern);
+
+        let recovered_scroll = parse_test("scroll Events { ) }");
+        assert_eq!(recovered_scroll.kind, NodeKind::ScrollDecl);
+
+        let postfix_bang_type = parse_type_test("value! or fallback");
+        assert_eq!(postfix_bang_type.kind, NodeKind::CascadeExpr);
+    }
+
+    #[test]
+    fn test_parse_generic_helpers_and_attribute_commas_cover_bracket_paths() {
+        let mut generic_params = parser_from("[T, U]");
+        assert_eq!(
+            generic_params.parse_generic_params().kind,
+            NodeKind::GenericParams
+        );
+
+        let mut generic_args = parser_from("[A, B]");
+        assert_eq!(
+            generic_args.parse_generic_args().kind,
+            NodeKind::GenericArgs
+        );
+
+        let mut no_generic_params = parser_from("TypeName");
+        assert_eq!(
+            no_generic_params.parse_generic_params().kind,
+            NodeKind::GenericParams
+        );
+
+        let mut no_generic_args = parser_from("TypeName");
+        assert_eq!(
+            no_generic_args.parse_generic_args().kind,
+            NodeKind::GenericArgs
+        );
+
+        let mut attrs = parser_from("#[attr(a, b)]");
+        let parsed_attrs = attrs.parse_attributes();
+        assert_eq!(parsed_attrs.kind, NodeKind::Attributes);
+        assert!(count_kind(&parsed_attrs, NodeKind::Attribute) >= 1);
     }
 }
