@@ -1327,63 +1327,37 @@ mod tests {
     use super::*;
     use izel_lexer::Lexer;
 
-    fn parse_test(src: &str) -> SyntaxNode {
+    fn parser_from(src: &str) -> Parser {
         let mut lexer = Lexer::new(src, izel_span::SourceId(0));
         let mut tokens = Vec::new();
         loop {
             let t = lexer.next_token();
-            if t.kind == TokenKind::Eof {
-                tokens.push(t);
+            let kind = t.kind;
+            tokens.push(t);
+            if kind == TokenKind::Eof {
                 break;
             }
-            tokens.push(t);
         }
-        let mut parser = Parser::new(tokens, src.to_string());
+        Parser::new(tokens, src.to_string())
+    }
+
+    fn parse_test(src: &str) -> SyntaxNode {
+        let mut parser = parser_from(src);
         parser.parse_decl()
     }
 
     fn parse_source_test(src: &str) -> SyntaxNode {
-        let mut lexer = Lexer::new(src, izel_span::SourceId(0));
-        let mut tokens = Vec::new();
-        loop {
-            let t = lexer.next_token();
-            let kind = t.kind;
-            tokens.push(t);
-            if kind == TokenKind::Eof {
-                break;
-            }
-        }
-        let mut parser = Parser::new(tokens, src.to_string());
+        let mut parser = parser_from(src);
         parser.parse_source_file()
     }
 
     fn parse_pattern_test(src: &str) -> SyntaxNode {
-        let mut lexer = Lexer::new(src, izel_span::SourceId(0));
-        let mut tokens = Vec::new();
-        loop {
-            let t = lexer.next_token();
-            let kind = t.kind;
-            tokens.push(t);
-            if kind == TokenKind::Eof {
-                break;
-            }
-        }
-        let mut parser = Parser::new(tokens, src.to_string());
+        let mut parser = parser_from(src);
         parser.parse_pattern()
     }
 
     fn parse_type_test(src: &str) -> SyntaxNode {
-        let mut lexer = Lexer::new(src, izel_span::SourceId(0));
-        let mut tokens = Vec::new();
-        loop {
-            let t = lexer.next_token();
-            let kind = t.kind;
-            tokens.push(t);
-            if kind == TokenKind::Eof {
-                break;
-            }
-        }
-        let mut parser = Parser::new(tokens, src.to_string());
+        let mut parser = parser_from(src);
         parser.parse_type()
     }
 
@@ -1421,18 +1395,8 @@ mod tests {
         assert_eq!(node.kind, NodeKind::ForgeDecl);
 
         let has_attr = node.children.iter().any(|child| {
-            if let SyntaxElement::Node(n) = child {
-                n.kind == NodeKind::Attributes
-                    && n.children.iter().any(|attr_child| {
-                        if let SyntaxElement::Node(an) = attr_child {
-                            an.kind == NodeKind::Attribute
-                        } else {
-                            false
-                        }
-                    })
-            } else {
-                false
-            }
+            matches!(child, SyntaxElement::Node(n) if n.kind == NodeKind::Attributes
+                && n.children.iter().any(|attr_child| matches!(attr_child, SyntaxElement::Node(an) if an.kind == NodeKind::Attribute)))
         });
         assert!(has_attr, "Should have Attribute node");
     }
@@ -1522,5 +1486,66 @@ draw std/io::*;
 
         assert_eq!(token.kind, TokenKind::Eof);
         assert_eq!(parser.pos, 0);
+    }
+
+    #[test]
+    fn test_parse_source_file_recovers_from_unexpected_token() {
+        let root = parse_source_test("}");
+        assert_eq!(root.kind, NodeKind::SourceFile);
+    }
+
+    #[test]
+    fn test_parse_pkg_modifier_and_macro_bracket_forms_recovery() {
+        let malformed_pkg = parse_test("pkg(,) forge main() { give 0 }");
+        assert_eq!(malformed_pkg.kind, NodeKind::ExprStmt);
+
+        let bracket_macro = parse_test("macro demo![x, y]");
+        assert_eq!(bracket_macro.kind, NodeKind::MacroDecl);
+    }
+
+    #[test]
+    fn test_parse_scroll_variants_cover_visibility_and_unterminated_payload_paths() {
+        let with_struct_payload = parse_test("scroll Event { open hidden pkg Data { code: i32 ");
+        assert_eq!(with_struct_payload.kind, NodeKind::ScrollDecl);
+
+        let with_tuple_payload = parse_test("scroll Event { Data(i32 ");
+        assert_eq!(with_tuple_payload.kind, NodeKind::ScrollDecl);
+    }
+
+    #[test]
+    fn test_parse_control_flow_helpers_cover_branch_given_loop_while_each_and_block_stmt_paths() {
+        let mut given = parser_from("cond { give 1 } else given other { give 2 }");
+        assert_eq!(given.parse_given_expr(vec![]).kind, NodeKind::GivenExpr);
+
+        let mut branch = parser_from("value { ) _ given cond => 1, _ => 0 }");
+        assert_eq!(branch.parse_branch_expr(vec![]).kind, NodeKind::BranchExpr);
+
+        let mut while_expr = parser_from("cond { give 1 }");
+        assert_eq!(
+            while_expr.parse_while_expr(vec![]).kind,
+            NodeKind::WhileExpr
+        );
+
+        let mut each_expr = parser_from("item in items { give item }");
+        assert_eq!(each_expr.parse_each_expr(vec![]).kind, NodeKind::EachExpr);
+
+        let mut loop_expr = parser_from("{ give 0 }");
+        assert_eq!(loop_expr.parse_loop_expr(vec![]).kind, NodeKind::LoopExpr);
+
+        let mut give_stmt = parser_from("give 1;");
+        assert_eq!(give_stmt.parse_stmt().kind, NodeKind::GiveStmt);
+
+        let mut block_stmt = parser_from("{ give 1 }");
+        assert_eq!(block_stmt.parse_stmt().kind, NodeKind::Block);
+
+        let mut malformed_block = parser_from("{ ) }");
+        assert_eq!(malformed_block.parse_block().kind, NodeKind::Block);
+    }
+
+    #[test]
+    fn test_parse_attribute_default_branch_direct_call() {
+        let mut parser = parser_from("forge");
+        let attr = parser.parse_attribute();
+        assert_eq!(attr.kind, NodeKind::Attribute);
     }
 }

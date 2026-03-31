@@ -156,10 +156,10 @@ mod tests {
             .await
             .expect("initialize should succeed");
 
-        match init.capabilities.text_document_sync {
-            Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)) => {}
-            other => panic!("unexpected text document sync capability: {:?}", other),
-        }
+        assert!(matches!(
+            init.capabilities.text_document_sync,
+            Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL))
+        ));
 
         assert_eq!(
             init.capabilities.hover_provider,
@@ -243,6 +243,18 @@ mod tests {
         let backend = Backend { client: None };
         backend
             .validate_document(test_uri(), "shape Ready {}".to_string())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn validate_document_publishes_with_client() {
+        let (service, _socket) = LspService::new(|client| Backend {
+            client: Some(client),
+        });
+
+        service
+            .inner()
+            .validate_document(test_uri(), "echo { let x }".to_string())
             .await;
     }
 }
