@@ -1548,4 +1548,61 @@ draw std/io::*;
         let attr = parser.parse_attribute();
         assert_eq!(attr.kind, NodeKind::Attribute);
     }
+
+    #[test]
+    fn test_parse_macro_and_bridge_variants_cover_uncommon_paths() {
+        let macro_bracket = parse_test("macro demo![..args, value]");
+        assert_eq!(macro_bracket.kind, NodeKind::MacroDecl);
+
+        let bridge_without_body = parse_test("bridge \"c\"");
+        assert_eq!(bridge_without_body.kind, NodeKind::BridgeDecl);
+    }
+
+    #[test]
+    fn test_parse_pattern_pipe_token_scroll_recovery_and_type_postfix_bang() {
+        let tuple_variant = parse_pattern_test("Some(x, y)");
+        assert_eq!(tuple_variant.kind, NodeKind::Pattern);
+
+        // `|>` is lexed as `Pipe`, which is what `parse_pattern` currently checks.
+        let pipe_pattern = parse_pattern_test("left |> right");
+        assert_eq!(pipe_pattern.kind, NodeKind::Pattern);
+
+        let recovered_scroll = parse_test("scroll Events { ) }");
+        assert_eq!(recovered_scroll.kind, NodeKind::ScrollDecl);
+
+        let postfix_bang_type = parse_type_test("value! or fallback");
+        assert_eq!(postfix_bang_type.kind, NodeKind::CascadeExpr);
+    }
+
+    #[test]
+    fn test_parse_generic_helpers_and_attribute_commas_cover_bracket_paths() {
+        let mut generic_params = parser_from("[T, U]");
+        assert_eq!(
+            generic_params.parse_generic_params().kind,
+            NodeKind::GenericParams
+        );
+
+        let mut generic_args = parser_from("[A, B]");
+        assert_eq!(
+            generic_args.parse_generic_args().kind,
+            NodeKind::GenericArgs
+        );
+
+        let mut no_generic_params = parser_from("TypeName");
+        assert_eq!(
+            no_generic_params.parse_generic_params().kind,
+            NodeKind::GenericParams
+        );
+
+        let mut no_generic_args = parser_from("TypeName");
+        assert_eq!(
+            no_generic_args.parse_generic_args().kind,
+            NodeKind::GenericArgs
+        );
+
+        let mut attrs = parser_from("#[attr(a, b)]");
+        let parsed_attrs = attrs.parse_attributes();
+        assert_eq!(parsed_attrs.kind, NodeKind::Attributes);
+        assert!(count_kind(&parsed_attrs, NodeKind::Attribute) >= 1);
+    }
 }

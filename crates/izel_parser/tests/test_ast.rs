@@ -318,3 +318,128 @@ fn loop_while_each_and_arm_alpha_eq_are_stable() {
     };
     assert!(!each_expr.alpha_eq(&each_other));
 }
+
+#[test]
+fn literal_hash_and_equality_cover_all_variant_paths() {
+    let mut int_hash = DefaultHasher::new();
+    ast::Literal::Int(7).hash(&mut int_hash);
+
+    let mut str_hash = DefaultHasher::new();
+    ast::Literal::Str("izel".to_string()).hash(&mut str_hash);
+
+    let mut bool_hash = DefaultHasher::new();
+    ast::Literal::Bool(true).hash(&mut bool_hash);
+
+    let mut nil_hash = DefaultHasher::new();
+    ast::Literal::Nil.hash(&mut nil_hash);
+
+    assert_ne!(
+        ast::Literal::Str("same".to_string()),
+        ast::Literal::Bool(true)
+    );
+}
+
+#[test]
+fn alpha_eq_option_and_mismatch_paths_are_exercised() {
+    let block_none = ast::Block {
+        stmts: vec![],
+        expr: None,
+        span: span(),
+    };
+    let block_some = ast::Block {
+        stmts: vec![],
+        expr: Some(Box::new(int_lit(1))),
+        span: span(),
+    };
+
+    assert!(ast::Expr::Block(block_none.clone()).alpha_eq(&ast::Expr::Block(block_none.clone())));
+    assert!(!block_none.alpha_eq(&block_some));
+
+    let given_none = ast::Expr::Given {
+        cond: Box::new(ast::Expr::Literal(ast::Literal::Bool(true))),
+        then_block: block_none.clone(),
+        else_expr: None,
+    };
+    let given_some = ast::Expr::Given {
+        cond: Box::new(ast::Expr::Literal(ast::Literal::Bool(true))),
+        then_block: block_none.clone(),
+        else_expr: Some(Box::new(int_lit(0))),
+    };
+    assert!(given_none.alpha_eq(&given_none.clone()));
+    assert!(!given_none.alpha_eq(&given_some));
+
+    let cascade_none = ast::Expr::Cascade {
+        expr: Box::new(int_lit(3)),
+        context: None,
+    };
+    let cascade_some = ast::Expr::Cascade {
+        expr: Box::new(int_lit(3)),
+        context: Some(Box::new(int_lit(4))),
+    };
+    assert!(cascade_none.alpha_eq(&cascade_none.clone()));
+    assert!(!cascade_none.alpha_eq(&cascade_some));
+
+    let seek_none = ast::Expr::Seek {
+        body: block_none.clone(),
+        catch_var: None,
+        catch_body: None,
+    };
+    let seek_some = ast::Expr::Seek {
+        body: block_none.clone(),
+        catch_var: None,
+        catch_body: Some(block_none.clone()),
+    };
+    assert!(seek_none.alpha_eq(&seek_none.clone()));
+    assert!(!seek_none.alpha_eq(&seek_some));
+
+    let let_none = ast::Stmt::Let {
+        pat: ast::Pattern::Ident("x".to_string(), false, span()),
+        ty: None,
+        init: None,
+        span: span(),
+    };
+    let let_with_ty = ast::Stmt::Let {
+        pat: ast::Pattern::Ident("x".to_string(), false, span()),
+        ty: Some(ast::Type::Prim("i32".to_string())),
+        init: None,
+        span: span(),
+    };
+    let let_with_init = ast::Stmt::Let {
+        pat: ast::Pattern::Ident("x".to_string(), false, span()),
+        ty: None,
+        init: Some(int_lit(1)),
+        span: span(),
+    };
+
+    assert!(let_none.alpha_eq(&let_none.clone()));
+    assert!(!let_none.alpha_eq(&let_with_ty));
+    assert!(!let_none.alpha_eq(&let_with_init));
+    assert!(!let_none.alpha_eq(&ast::Stmt::Expr(int_lit(1))));
+
+    assert!(!ast::Pattern::Wildcard.alpha_eq(&ast::Pattern::Literal(ast::Literal::Nil)));
+
+    assert!(
+        !ast::Type::Prim("i32".to_string()).alpha_eq(&ast::Type::Optional(Box::new(
+            ast::Type::Prim("i32".to_string())
+        )))
+    );
+
+    assert!(!ast::GenericArg::Type(ast::Type::Prim("i32".to_string()))
+        .alpha_eq(&ast::GenericArg::Expr(int_lit(0))));
+
+    let arm_no_guard = ast::Arm {
+        pattern: ast::Pattern::Wildcard,
+        guard: None,
+        body: int_lit(1),
+        span: span(),
+    };
+    let arm_with_guard = ast::Arm {
+        pattern: ast::Pattern::Wildcard,
+        guard: Some(ast::Expr::Literal(ast::Literal::Bool(true))),
+        body: int_lit(1),
+        span: span(),
+    };
+
+    assert!(arm_no_guard.alpha_eq(&arm_no_guard.clone()));
+    assert!(!arm_no_guard.alpha_eq(&arm_with_guard));
+}
