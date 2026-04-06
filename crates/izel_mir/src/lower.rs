@@ -536,11 +536,8 @@ mod tests {
         let mut found_assert = false;
         for node in mir.blocks.node_indices() {
             for inst in &mir.blocks[node].instructions {
-                if let Instruction::Assert(_, msg) = inst {
-                    if msg == "precondition violation" {
-                        found_assert = true;
-                    }
-                }
+                found_assert |=
+                    matches!(inst, Instruction::Assert(_, msg) if msg == "precondition violation");
             }
         }
         assert!(found_assert);
@@ -659,11 +656,8 @@ mod tests {
         let mut found_post_assert = false;
         for node in mir.blocks.node_indices() {
             for inst in &mir.blocks[node].instructions {
-                if let Instruction::Assert(_, msg) = inst {
-                    if msg == "postcondition violation" {
-                        found_post_assert = true;
-                    }
-                }
+                found_post_assert |=
+                    matches!(inst, Instruction::Assert(_, msg) if msg == "postcondition violation");
             }
         }
 
@@ -697,16 +691,8 @@ mod tests {
 
         for node in mir.blocks.node_indices() {
             for inst in &mir.blocks[node].instructions {
-                if let Instruction::ZoneEnter(name) = inst {
-                    if name == "temp_arena" {
-                        found_enter = true;
-                    }
-                }
-                if let Instruction::ZoneExit(name) = inst {
-                    if name == "temp_arena" {
-                        found_exit = true;
-                    }
-                }
+                found_enter |= matches!(inst, Instruction::ZoneEnter(name) if name == "temp_arena");
+                found_exit |= matches!(inst, Instruction::ZoneExit(name) if name == "temp_arena");
             }
         }
 
@@ -814,17 +800,11 @@ mod tests {
         let mut found_void_call = false;
         for node in lowerer.body.blocks.node_indices() {
             for inst in &lowerer.body.blocks[node].instructions {
-                if let Instruction::Call(None, callee, _) = inst {
-                    if callee == "unknown" {
-                        found_void_call = true;
-                    }
-                }
+                found_void_call |=
+                    matches!(inst, Instruction::Call(None, callee, _) if callee == "unknown");
             }
         }
-        assert!(
-            found_void_call,
-            "void calls with non-ident callee should be lowered"
-        );
+        assert!(found_void_call);
     }
 
     #[test]

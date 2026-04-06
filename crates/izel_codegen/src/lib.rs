@@ -416,14 +416,11 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 let val = function.get_nth_param(0).unwrap().into_int_value();
                 // LLVM doesn't have a direct 'abs' int instruction, we use the intrinsic
                 let abs_intrinsic = self.get_intrinsic("llvm.abs.i32")?;
-                let call = self.builder.build_call(
-                    abs_intrinsic,
-                    &[
-                        val.into(),
-                        self.context.bool_type().const_int(0, false).into(),
-                    ],
-                    "abs",
-                )?;
+                let abs_args = [
+                    val.into(),
+                    self.context.bool_type().const_int(0, false).into(),
+                ];
+                let call = self.builder.build_call(abs_intrinsic, &abs_args, "abs")?;
                 self.builder
                     .build_return(Some(&call.try_as_basic_value().left().unwrap()))?;
             }
@@ -458,21 +455,15 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 let val = function.get_nth_param(0).unwrap();
                 let printf = self.get_printf()?;
                 let format_str = self.builder.build_global_string_ptr("%d\n", "format_int")?;
-                self.builder.build_call(
-                    printf,
-                    &[format_str.as_pointer_value().into(), val.into()],
-                    "printf",
-                )?;
+                let printf_args = [format_str.as_pointer_value().into(), val.into()];
+                self.builder.build_call(printf, &printf_args, "printf")?;
                 self.builder.build_return(None)?;
             }
             "io_print_newline" => {
                 let printf = self.get_printf()?;
                 let format_str = self.builder.build_global_string_ptr("\n", "format_nl")?;
-                self.builder.build_call(
-                    printf,
-                    &[format_str.as_pointer_value().into()],
-                    "printf",
-                )?;
+                let printf_args = [format_str.as_pointer_value().into()];
+                self.builder.build_call(printf, &printf_args, "printf")?;
                 self.builder.build_return(None)?;
             }
             "mem_alloc" => {
@@ -499,12 +490,10 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 let mut vec = v4i32.get_undef();
                 for i in 0..4u32 {
                     let lane = function.get_nth_param(i).unwrap().into_int_value();
-                    vec = self.builder.build_insert_element(
-                        vec,
-                        lane,
-                        self.context.i32_type().const_int(i as u64, false),
-                        "ins",
-                    )?;
+                    let lane_index = self.context.i32_type().const_int(i as u64, false);
+                    vec = self
+                        .builder
+                        .build_insert_element(vec, lane, lane_index, "ins")?;
                 }
 
                 let reduce_add = self.get_intrinsic("llvm.vector.reduce.add.v4i32")?;

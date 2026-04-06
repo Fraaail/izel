@@ -525,4 +525,28 @@ mod tests {
         let struct_lit = parse_test_expr("Point { x: 1, y: 2 }", Precedence::None);
         assert_eq!(struct_lit.kind, NodeKind::StructLiteral);
     }
+
+    #[test]
+    fn test_parse_macro_path_and_seek_catch_name_paths() {
+        let macro_paren = parse_test_expr("here!(x)", Precedence::None);
+        assert_eq!(macro_paren.kind, NodeKind::MacroCall);
+
+        let macro_bracket = parse_test_expr("here![x]", Precedence::None);
+        assert_eq!(macro_bracket.kind, NodeKind::MacroCall);
+
+        let path_component = parse_test_expr("pkg::item", Precedence::None);
+        assert_eq!(path_component.kind, NodeKind::PathExpr);
+        assert!(path_component
+            .children
+            .iter()
+            .any(|child| matches!(child, SyntaxElement::Token(t) if t.kind == TokenKind::Ident)));
+
+        let seek_with_named_catch =
+            parse_test_expr("seek { give 1 } catch err { give 2 }", Precedence::None);
+        assert_eq!(seek_with_named_catch.kind, NodeKind::SeekExpr);
+        assert!(seek_with_named_catch
+            .children
+            .iter()
+            .any(|child| matches!(child, SyntaxElement::Token(t) if t.kind == TokenKind::Ident)));
+    }
 }

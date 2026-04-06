@@ -736,6 +736,6 @@ mod tests {
 
         let mut bc = BorrowChecker::new();
         let res = bc.check(&mir);
-        assert!(res.is_ok(), "Errors: {:?}", res.err());
+        assert!(res.is_ok());
     }
 }

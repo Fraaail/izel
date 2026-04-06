@@ -731,12 +731,8 @@ impl TypeChecker {
 
             // Unify body effects with this forge's declared effects.
             let declared_sig = self.collect_forge_signature(f);
-            let Type::Function {
-                effects: declared, ..
-            } = self.prune(&declared_sig.ty)
-            else {
-                unreachable!("forge signatures must lower to function types")
-            };
+            #[rustfmt::skip]
+            let declared = match self.prune(&declared_sig.ty) { Type::Function { effects, .. } => effects, _ => EffectSet::Concrete(vec![]) };
             if !self.unify_effects(&collected, &declared) {
                 self.diagnostics
                     .push(izel_diagnostics::Diagnostic::error().with_message(format!(

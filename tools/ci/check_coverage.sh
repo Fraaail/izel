@@ -32,22 +32,36 @@ fi
 echo "== Izel Coverage Check =="
 echo "Target minimum line coverage: ${MIN_LINES}%"
 
-output="$(cargo llvm-cov --workspace --all-features --summary-only 2>&1)"
+mkdir -p target/coverage
+lcov_file="target/coverage/check_coverage.lcov"
+output="$(cargo llvm-cov --workspace --all-features --lcov --output-path "$lcov_file" 2>&1)"
 echo "$output"
 
-total_line="$(grep -E '^TOTAL' <<<"$output" | tail -n1 || true)"
-if [[ -z "$total_line" ]]; then
-    echo "[error] Could not find TOTAL line in coverage output."
+if [[ ! -f "$lcov_file" ]]; then
+    echo "[error] Expected LCOV output file was not generated: $lcov_file"
     exit 1
 fi
 
-line_percent_raw="$(grep -Eo '[0-9]+(\.[0-9]+)?%' <<<"$total_line" | tail -n1 || true)"
-if [[ -z "$line_percent_raw" ]]; then
-    echo "[error] Could not parse line coverage percentage from: $total_line"
+line_percent="$(awk -F'[:,]' '
+    /^DA:/ {
+        total += 1;
+        if ($3 + 0 > 0) {
+            covered += 1;
+        }
+    }
+    END {
+        if (total == 0) {
+            print "0";
+        } else {
+            printf "%.2f", (covered * 100.0) / total;
+        }
+    }
+' "$lcov_file")"
+
+if [[ -z "$line_percent" ]]; then
+    echo "[error] Could not compute line coverage percentage from LCOV data."
     exit 1
 fi
-
-line_percent="${line_percent_raw%%%}"
 
 if [[ "$REPORT_ONLY" == true ]]; then
     echo "Report-only mode: measured line coverage is ${line_percent}%"

@@ -267,3 +267,105 @@ fn borrow_checker_ignores_mismatched_zone_exit_name() {
     let mut checker = BorrowChecker::new();
     assert!(checker.check(&mir).is_ok());
 }
+
+#[test]
+fn borrow_checker_zone_assign_pointer_path_is_valid() {
+    let mut mir = MirBody::new();
+    let p = Local(0);
+    mir.locals.push(LocalData {
+        name: "p".to_string(),
+        ty: Type::Pointer(
+            Box::new(Type::Adt(izel_resolve::DefId(12))),
+            false,
+            izel_typeck::type_system::Lifetime::Anonymous(0),
+        ),
+    });
+
+    let bb = mir.blocks.node_weight_mut(mir.entry).unwrap();
+    bb.instructions
+        .push(Instruction::ZoneEnter("arena".to_string()));
+    bb.instructions.push(Instruction::Assign(
+        p,
+        Rvalue::Use(Operand::Constant(Constant::Int(1))),
+    ));
+    bb.instructions
+        .push(Instruction::ZoneExit("arena".to_string()));
+
+    let mut checker = BorrowChecker::new();
+    assert!(checker.check(&mir).is_ok());
+}
+
+#[test]
+fn borrow_checker_reports_move_while_borrow_is_live() {
+    let mut mir = MirBody::new();
+    let x = Local(0);
+    let r = Local(1);
+    let sink = Local(2);
+
+    mir.locals.push(LocalData {
+        name: "x".to_string(),
+        ty: Type::Adt(izel_resolve::DefId(13)),
+    });
+    mir.locals.push(LocalData {
+        name: "r".to_string(),
+        ty: Type::Pointer(
+            Box::new(Type::Adt(izel_resolve::DefId(13))),
+            false,
+            izel_typeck::type_system::Lifetime::Anonymous(0),
+        ),
+    });
+    mir.locals.push(LocalData {
+        name: "sink".to_string(),
+        ty: Type::Adt(izel_resolve::DefId(13)),
+    });
+
+    let bb = mir.blocks.node_weight_mut(mir.entry).unwrap();
+    bb.instructions.push(Instruction::Assign(
+        x,
+        Rvalue::Use(Operand::Constant(Constant::Int(1))),
+    ));
+    bb.instructions
+        .push(Instruction::Assign(r, Rvalue::Ref(x, false)));
+    bb.instructions
+        .push(Instruction::Assign(sink, Rvalue::Use(Operand::Move(x))));
+
+    let mut checker = BorrowChecker::new();
+    let errors = checker
+        .check(&mir)
+        .expect_err("move while borrowed should be rejected");
+    assert!(errors
+        .iter()
+        .any(|e| e.contains("Cannot move x because it is currently borrowed")));
+}
+
+#[test]
+fn borrow_checker_reports_copy_of_non_copyable_type() {
+    let mut mir = MirBody::new();
+    let x = Local(0);
+    let y = Local(1);
+
+    mir.locals.push(LocalData {
+        name: "x".to_string(),
+        ty: Type::Adt(izel_resolve::DefId(14)),
+    });
+    mir.locals.push(LocalData {
+        name: "y".to_string(),
+        ty: Type::Adt(izel_resolve::DefId(14)),
+    });
+
+    let bb = mir.blocks.node_weight_mut(mir.entry).unwrap();
+    bb.instructions.push(Instruction::Assign(
+        x,
+        Rvalue::Use(Operand::Constant(Constant::Int(1))),
+    ));
+    bb.instructions
+        .push(Instruction::Assign(y, Rvalue::Use(Operand::Copy(x))));
+
+    let mut checker = BorrowChecker::new();
+    let errors = checker
+        .check(&mir)
+        .expect_err("copying non-copyable type should be rejected");
+    assert!(errors
+        .iter()
+        .any(|e| e.contains("Cannot copy non-copyable type")));
+}
