@@ -219,7 +219,7 @@ fn generate_roundtrip_test(
         ensures: vec![],
         body: Some(ast::Block {
             stmts: vec![],
-            expr: Some(Box::new(ast::Expr::Ident("todo".into(), span))),
+            expr: None,
             span,
         }),
         span,

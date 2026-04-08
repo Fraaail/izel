@@ -1,3 +1,7 @@
-# Witness Types
+# Witnesses Chapter Redirect
 
-This chapter will cover witness types in Izel...
+Primary chapter:
+- `docs/book/05-witnesses.md`
+
+Normative companion:
+- `docs/spec/06-witnesses.md`

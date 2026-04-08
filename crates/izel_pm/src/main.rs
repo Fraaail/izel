@@ -442,7 +442,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_project, parse_command, usage, Command, NewProjectKind};
+    use super::{
+        create_project, parse_command, split_package_spec, usage, Command, NewProjectKind,
+    };
     use std::fs;
     use std::io;
     #[cfg(unix)]
@@ -572,6 +574,131 @@ mod tests {
     }
 
     #[test]
+    fn parse_misc_subcommands_and_options() {
+        assert_eq!(
+            parse_command(&["bench".into(), "core".into()]).unwrap(),
+            Command::Bench {
+                filter: Some("core".to_string())
+            }
+        );
+        assert_eq!(parse_command(&["check".into()]).unwrap(), Command::Check);
+        assert_eq!(
+            parse_command(&["fmt".into()]).unwrap(),
+            Command::Fmt { check: false }
+        );
+        assert_eq!(
+            parse_command(&["fmt".into(), "--check".into()]).unwrap(),
+            Command::Fmt { check: true }
+        );
+        assert_eq!(parse_command(&["lint".into()]).unwrap(), Command::Lint);
+        assert_eq!(
+            parse_command(&["doc".into()]).unwrap(),
+            Command::Doc { open: false }
+        );
+        assert_eq!(
+            parse_command(&["doc".into(), "--open".into()]).unwrap(),
+            Command::Doc { open: true }
+        );
+        assert_eq!(
+            parse_command(&["remove".into(), "pkg".into()]).unwrap(),
+            Command::Remove {
+                package: "pkg".to_string()
+            }
+        );
+        assert_eq!(parse_command(&["update".into()]).unwrap(), Command::Update);
+        assert_eq!(
+            parse_command(&["publish".into()]).unwrap(),
+            Command::Publish
+        );
+        assert_eq!(parse_command(&["clean".into()]).unwrap(), Command::Clean);
+        assert_eq!(parse_command(&["tree".into()]).unwrap(), Command::Tree);
+        assert_eq!(parse_command(&["audit".into()]).unwrap(), Command::Audit);
+    }
+
+    #[test]
+    fn parse_new_rejects_invalid_flags_and_conflicts() {
+        let bad = parse_command(&["new".into(), "demo".into(), "--bad".into()])
+            .expect_err("invalid new flag must fail");
+        assert!(bad.contains("usage: izel new <name>"));
+
+        let conflict = parse_command(&[
+            "new".into(),
+            "demo".into(),
+            "--lib".into(),
+            "--workspace".into(),
+        ])
+        .expect_err("conflicting kind flags must fail");
+        assert!(conflict.contains("choose only one"));
+    }
+
+    #[test]
+    fn parse_build_rejects_invalid_forms() {
+        let missing_target = parse_command(&["build".into(), "--target".into()])
+            .expect_err("missing target triple must fail");
+        assert!(missing_target.contains("usage: izel build"));
+
+        let bad_flag = parse_command(&["build".into(), "--bogus".into()])
+            .expect_err("unknown build flag must fail");
+        assert!(bad_flag.contains("usage: izel build"));
+    }
+
+    #[test]
+    fn parse_test_rejects_invalid_thread_inputs() {
+        let missing = parse_command(&["test".into(), "--threads".into()])
+            .expect_err("missing threads value must fail");
+        assert!(missing.contains("usage: izel test"));
+
+        let zero = parse_command(&["test".into(), "--threads".into(), "0".into()])
+            .expect_err("zero threads must fail");
+        assert!(zero.contains("positive integer"));
+
+        let non_numeric = parse_command(&["test".into(), "--threads".into(), "abc".into()])
+            .expect_err("non-numeric threads must fail");
+        assert!(non_numeric.contains("positive integer"));
+
+        let unknown = parse_command(&["test".into(), "--bogus".into()])
+            .expect_err("unknown test arg must fail");
+        assert!(unknown.contains("usage: izel test"));
+    }
+
+    #[test]
+    fn parse_add_and_split_package_spec_cover_error_paths() {
+        let missing_add = parse_command(&["add".into()]).expect_err("add without pkg must fail");
+        assert!(missing_add.contains("usage: izel add"));
+
+        let bad_add_flag = parse_command(&["add".into(), "demo".into(), "--bad".into()])
+            .expect_err("unknown add flag must fail");
+        assert!(bad_add_flag.contains("usage: izel add"));
+
+        assert!(split_package_spec("@").is_err());
+        assert!(split_package_spec("pkg@").is_err());
+        assert!(split_package_spec("").is_err());
+        assert_eq!(
+            split_package_spec("pkg").unwrap(),
+            ("pkg".to_string(), None)
+        );
+        assert_eq!(
+            split_package_spec("pkg@1.0.0").unwrap(),
+            ("pkg".to_string(), Some("1.0.0".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_misc_subcommands_reject_extra_arguments() {
+        assert!(parse_command(&["bench".into(), "a".into(), "b".into()]).is_err());
+        assert!(parse_command(&["check".into(), "x".into()]).is_err());
+        assert!(parse_command(&["fmt".into(), "--bad".into()]).is_err());
+        assert!(parse_command(&["lint".into(), "x".into()]).is_err());
+        assert!(parse_command(&["doc".into(), "--bad".into()]).is_err());
+        assert!(parse_command(&["remove".into()]).is_err());
+        assert!(parse_command(&["update".into(), "x".into()]).is_err());
+        assert!(parse_command(&["publish".into(), "x".into()]).is_err());
+        assert!(parse_command(&["clean".into(), "x".into()]).is_err());
+        assert!(parse_command(&["tree".into(), "x".into()]).is_err());
+        assert!(parse_command(&["audit".into(), "x".into()]).is_err());
+    }
+
+    #[test]
     fn parse_new_requires_name_argument() {
         let missing = parse_command(&["new".into()]).expect_err("new without name must fail");
         assert!(missing.contains("usage: izel new <name>"));
@@ -682,6 +809,32 @@ mod tests {
 
         assert!(manifest_after.contains("name=\"keep\""));
         assert!(main_after.contains("forge main()"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_lib_project_is_idempotent_for_existing_files() {
+        let root = temp_project_root("idempotent-lib");
+        let src = root.join("src");
+        fs::create_dir_all(&src).expect("setup src dir");
+
+        let manifest = root.join("Izel.toml");
+        let lib = src.join("lib.iz");
+        fs::write(&manifest, "[package]\nname=\"keep\"\nversion=\"0.1.0\"\n")
+            .expect("write existing manifest");
+        fs::write(&lib, "open forge existing() -> str {\n    \"keep\"\n}\n")
+            .expect("write existing lib");
+
+        let root_str = root.to_string_lossy().to_string();
+        create_project(&root_str, NewProjectKind::Lib)
+            .expect("project creation should still succeed");
+
+        let manifest_after = fs::read_to_string(&manifest).expect("manifest should still exist");
+        let lib_after = fs::read_to_string(&lib).expect("lib should still exist");
+
+        assert!(manifest_after.contains("name=\"keep\""));
+        assert!(lib_after.contains("open forge existing()"));
 
         let _ = fs::remove_dir_all(&root);
     }

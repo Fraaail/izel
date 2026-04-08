@@ -1,1 +1,13 @@
-// Placeholder test file
+forge sum_to(n: i32) -> i32 {
+	~acc = 0
+	~i = 0
+	while i <= n {
+		~acc = acc + i
+		~i = i + 1
+	}
+	acc
+}
+
+forge main() -> i32 {
+	sum_to(10)
+}

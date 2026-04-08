@@ -2366,7 +2366,8 @@ impl TypeChecker {
             }
         };
 
-        // TODO: Store in expr_types
+        let expr_key = expr as *const ast::Expr as usize;
+        self.expr_types.insert(expr_key, res.clone());
         res
     }
 

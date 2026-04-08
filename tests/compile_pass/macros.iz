@@ -1,1 +1,8 @@
-// Placeholder test file
+macro add_one(x) {
+	x + 1
+}
+
+forge main() -> i32 {
+	let value = 41
+	add_one!(value)
+}

@@ -234,7 +234,34 @@ impl<'a> HirLowerer<'a> {
                 body: self.lower_block(body),
                 ty: Type::Error,
             },
-            ast::Expr::StructLiteral { .. } => HirExpr::Literal(ast::Literal::Nil), // Stub
+            ast::Expr::StructLiteral { path, fields } => {
+                let ctor_name = match path {
+                    ast::Type::Prim(name) => name.clone(),
+                    ast::Type::Path(segments, _) => segments
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| "<anon>".to_string()),
+                    ast::Type::SelfType => "Self".to_string(),
+                    _ => "<anon>".to_string(),
+                };
+
+                let args = fields
+                    .iter()
+                    .map(|(_, expr)| self.lower_expr(expr))
+                    .collect::<Vec<_>>();
+
+                HirExpr::Call(
+                    Box::new(HirExpr::Ident(
+                        ctor_name,
+                        DefId(0),
+                        Type::Error,
+                        Span::dummy(),
+                    )),
+                    args,
+                    vec![],
+                    Type::Error,
+                )
+            }
             _ => HirExpr::Literal(ast::Literal::Nil),
         }
     }
@@ -626,9 +653,36 @@ mod tests {
             path: ast_prim("Point"),
             fields: vec![("x".to_string(), ast::Expr::Literal(ast::Literal::Int(1)))],
         };
+        assert!(matches!(lowerer.lower_expr(&struct_lit), HirExpr::Call(..)));
+
+        let struct_lit_path = ast::Expr::StructLiteral {
+            path: ast::Type::Path(vec!["geom".to_string(), "Point".to_string()], vec![]),
+            fields: vec![],
+        };
+        let lowered_path = lowerer.lower_expr(&struct_lit_path);
         assert!(matches!(
-            lowerer.lower_expr(&struct_lit),
-            HirExpr::Literal(ast::Literal::Nil)
+            lowered_path,
+            HirExpr::Call(ref callee, ref args, _, ref ty)
+                if args.is_empty()
+                    && *ty == Type::Error
+                    && matches!(
+                        callee.as_ref(),
+                        HirExpr::Ident(ref name, _, _, _) if name == "Point"
+                    )
+        ));
+
+        let struct_lit_empty_path = ast::Expr::StructLiteral {
+            path: ast::Type::Path(vec![], vec![]),
+            fields: vec![],
+        };
+        let lowered_empty_path = lowerer.lower_expr(&struct_lit_empty_path);
+        assert!(matches!(
+            lowered_empty_path,
+            HirExpr::Call(ref callee, _, _, _)
+                if matches!(
+                    callee.as_ref(),
+                    HirExpr::Ident(ref name, _, _, _) if name == "<anon>"
+                )
         ));
 
         let fallback = ast::Expr::Path(vec!["A".to_string()], vec![]);

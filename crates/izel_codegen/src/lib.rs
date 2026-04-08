@@ -124,8 +124,39 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                     self.builder.build_store(ptr, val)?;
                 }
             }
-            Instruction::Phi(_local, _entries) => {
-                // TODO: Implement Phi properly
+            Instruction::Phi(local, entries) => {
+                if entries.is_empty() {
+                    return Ok(());
+                }
+
+                let ty = llvm_type_static(self.context, &body.locals[local.0].ty)?;
+                let phi = self.builder.build_phi(ty, "phi_tmp")?;
+
+                let mut incoming_values = Vec::new();
+                let temp_builder = self.context.create_builder();
+
+                for (pred, src_local) in entries {
+                    let pred_bb = self.blocks[pred];
+                    if let Some(term) = pred_bb.get_terminator() {
+                        temp_builder.position_before(&term);
+                    } else {
+                        temp_builder.position_at_end(pred_bb);
+                    }
+
+                    let src_ptr = self.locals[src_local];
+                    let src_ty = llvm_type_static(self.context, &body.locals[src_local.0].ty)?;
+                    let loaded = temp_builder.build_load(src_ty, src_ptr, "phi_in")?;
+                    incoming_values.push((loaded, pred_bb));
+                }
+
+                let incoming_refs = incoming_values
+                    .iter()
+                    .map(|(val, bb)| (val as &dyn BasicValue<'ctx>, *bb))
+                    .collect::<Vec<_>>();
+                phi.add_incoming(&incoming_refs);
+
+                let ptr = self.locals[local];
+                self.builder.build_store(ptr, phi.as_basic_value())?;
             }
             Instruction::Assert(op, _msg) => {
                 let cond = self.gen_operand(op, body)?.into_int_value();
@@ -1198,6 +1229,77 @@ mod tests {
         assert!(ir.contains("define void @no_term_fn()"));
         assert!(ir.contains("unreachable"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_mir_codegen_phi_with_incoming_entries() -> Result<()> {
+        use izel_mir::{BasicBlock, LocalData};
+
+        let context = Context::create();
+        let module = context.create_module("test_phi_codegen");
+        let builder = context.create_builder();
+        let function = module.add_function("phi_fn", context.i32_type().fn_type(&[], false), None);
+
+        let mut body = MirBody::new();
+        let pred_with_term = body.blocks.add_node(BasicBlock {
+            instructions: Vec::new(),
+            terminator: Some(Terminator::Goto(body.entry)),
+        });
+        let pred_without_term = body.blocks.add_node(BasicBlock {
+            instructions: Vec::new(),
+            terminator: None,
+        });
+        let target = body.blocks.add_node(BasicBlock {
+            instructions: Vec::new(),
+            terminator: Some(Terminator::Return(Some(Operand::Copy(Local(1))))),
+        });
+
+        body.locals = vec![
+            LocalData {
+                name: "a".into(),
+                ty: Type::Prim(PrimType::I32),
+            },
+            LocalData {
+                name: "b".into(),
+                ty: Type::Prim(PrimType::I32),
+            },
+        ];
+
+        let entry_bb = context.append_basic_block(function, "entry");
+        let pred_term_bb = context.append_basic_block(function, "pred_term");
+        let pred_none_bb = context.append_basic_block(function, "pred_none");
+        let target_bb = context.append_basic_block(function, "target");
+
+        let mut mir_codegen = MirCodegen::new(&context, &module, &builder);
+        mir_codegen.blocks.insert(body.entry, entry_bb);
+        mir_codegen.blocks.insert(pred_with_term, pred_term_bb);
+        mir_codegen.blocks.insert(pred_without_term, pred_none_bb);
+        mir_codegen.blocks.insert(target, target_bb);
+
+        builder.position_at_end(entry_bb);
+        let a_ptr = builder.build_alloca(context.i32_type(), "a")?;
+        let b_ptr = builder.build_alloca(context.i32_type(), "b")?;
+        builder.build_store(a_ptr, context.i32_type().const_int(7, false))?;
+        builder.build_store(b_ptr, context.i32_type().const_int(0, false))?;
+        builder.build_unconditional_branch(target_bb)?;
+
+        builder.position_at_end(pred_term_bb);
+        builder.build_unconditional_branch(target_bb)?;
+
+        builder.position_at_end(target_bb);
+        mir_codegen.locals.insert(Local(0), a_ptr);
+        mir_codegen.locals.insert(Local(1), b_ptr);
+
+        let phi_inst = Instruction::Phi(
+            Local(1),
+            vec![(pred_with_term, Local(0)), (pred_without_term, Local(0))],
+        );
+        mir_codegen.gen_instruction(&phi_inst, &body)?;
+        mir_codegen.gen_terminator(&Terminator::Return(Some(Operand::Copy(Local(1)))), &body)?;
+
+        let ir = module.print_to_string().to_string();
+        assert!(ir.contains("phi i32"));
         Ok(())
     }
 
