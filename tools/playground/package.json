@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "serve": "python3 -m http.server 4173",
-    "build:wasm": "cd wasm && cargo build --target wasm32-unknown-unknown"
+    "build:wasm": "rustup target add wasm32-unknown-unknown && cd wasm && cargo build --target wasm32-unknown-unknown && wasm-bindgen --target web --out-dir ../pkg target/wasm32-unknown-unknown/debug/izel_playground.wasm",
+    "build:wasm:release": "rustup target add wasm32-unknown-unknown && cd wasm && cargo build --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir ../pkg target/wasm32-unknown-unknown/release/izel_playground.wasm"
   }
 }

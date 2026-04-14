@@ -1834,7 +1834,7 @@ weave Allocator {
 |------|----------|
 | `std::test` | `#[test]`, `assert!`, `assert_eq!`, `should_panic!` |
 | `std::bench` | `#[bench]`, `Bencher`, `black_box` |
-| `std::mock` | Mockable weave stubs for effect testing |
+| `std::mock` | Mocking weaves and test runtime helpers for effect testing |
 
 ---
 
@@ -1883,8 +1883,8 @@ izel audit
 ```
 
 Implementation snapshot (2026-04-07):
-- The `izelc` flag surface above is parsed in `izel_session::SessionOptions`; some flags are currently accepted as forward-compatible scaffolding while backend wiring continues.
-- The `izel` command surface above is now recognized by the CLI entrypoint; `new` and manifest/dependency flows are functional, while several commands still return scaffold status messages.
+- The `izelc` flag surface above is parsed in `izel_session::SessionOptions`; active backend behavior depends on the selected emit mode and target pipeline stage.
+- The `izel` command surface above is implemented in the CLI entrypoint with project creation, manifest/dependency editing, and cargo-backed build/test/doc workflows.
 
 ### `Izel.toml` — Project Manifest
 

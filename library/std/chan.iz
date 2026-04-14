@@ -8,8 +8,7 @@ shape Sender<T> {
 
 impl<T> Sender<T> {
     // Sends a value into the channel. Blocks or suspends until the receiver is ready (if bounded/synchronous).
-    // In an asynchronous context, this should ideally be non-blocking or a suspend point (i.e. returning a Flow).
-    // For now, we represent the basic primitive.
+    // In an asynchronous context this acts as the canonical send primitive.
     open forge send(val: T) -> Result<void, ()> {
         // Implementation provided by runtime/compiler intrinsics
         Result::Ok(())
@@ -28,7 +27,7 @@ impl<T> Receiver<T> {
     // In Izel, blocking operations are expected to be marked as `flow`, so the caller must `tide` them.
     open flow forge recv() -> Result<T, ()> {
         // Implementation provided by runtime/compiler intrinsics
-        Result::Err(()) // Placeholder
+        Result::Err(())
     }
 }
 

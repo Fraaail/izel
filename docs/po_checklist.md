@@ -13,10 +13,10 @@ This checklist was reconciled against the repository using:
 - `bash tools/ci/check_coverage.sh --report-only` (last measured pass: `99.99%`, measured on 2026-04-08)
 
 Key alignment notes:
-- Overview section 32 CLI surface is now aligned with implemented parser/entrypoint support for both `izelc` and `izel` (some commands remain scaffold-level behavior by design).
+- Overview section 32 CLI surface is now aligned with implemented parser/entrypoint support for both `izelc` and `izel`.
 - Overview section 33 directory map was updated to match the current repository layout, including `LICENSE`, `docs/reference/`, and the split std source locations (`library/std`, `std`, `crates/izel_std`).
 - Exhaustive test claims are tracked in `docs/tests_checklist.md` with evidence-based status.
-- Crate-level integration placeholders were replaced with concrete tests; remaining gap to 100% coverage is tracked explicitly in `docs/tests_checklist.md`.
+- Crate-level integration coverage now uses concrete tests; remaining gap to 100% coverage is tracked explicitly in `docs/tests_checklist.md`.
 
 ## 1. Identity & Vision
 - [ ] The Name
@@ -193,7 +193,7 @@ Key alignment notes:
 - [x] `izel-lint` — Linter
 
 ## 33. Project Directory Structure
-- [x] Scaffolding Complete
+- [x] Directory Mapping Complete
 
 ## 34. Milestones & Roadmap
 - [x] Phase 0 — Bootstrap (Months 1–2)

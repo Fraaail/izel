@@ -528,7 +528,7 @@ impl Parser {
             children.extend(self.eat_trivia());
             // Optional data Circle { radius: f64 } or Point(f64, f64)
             if self.current_kind() == TokenKind::OpenBrace {
-                // Reuse field parsing or block? Let's just consume for now
+                // Capture struct-style variant payload tokens.
                 children.push(SyntaxElement::Token(self.bump()));
                 while self.current_kind() != TokenKind::CloseBrace
                     && self.current_kind() != TokenKind::Eof

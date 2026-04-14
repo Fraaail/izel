@@ -55,8 +55,6 @@ Additional accepted command surfaces:
 - `build`, `run`, `test`, `bench`, `check`, `fmt`, `lint`, `doc`, `add`,
   `remove`, `update`, `publish`, `clean`, `tree`, `audit`
 
-Some commands are intentionally scaffold-level while implementation wiring evolves.
-
 ## First Program
 
 `src/main.iz`:

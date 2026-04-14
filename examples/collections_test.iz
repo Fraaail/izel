@@ -1,5 +1,5 @@
 // ⬡ IZEL — Collections Test
-// Verifies Vec, HashMap, and BTreeMap stubs.
+// Verifies Vec, HashMap, and BTreeMap APIs.
 
 draw std::collections::*
 

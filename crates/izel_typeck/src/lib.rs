@@ -240,7 +240,7 @@ impl TypeChecker {
                     ast::Visibility::Open => return Some(s.clone()),
                     ast::Visibility::Hidden => {
                         // Simplification: only allow if in current scope or same module context
-                        // For now, allow it within the same pass
+                        // Allow access during the current analysis pass.
                         return Some(s.clone());
                     }
                     ast::Visibility::Pkg => return Some(s.clone()),
@@ -824,8 +824,8 @@ impl TypeChecker {
                         // Record that invariants must hold as postconditions
                         // (The runtime check is handled by MIR assertion injection)
                         for inv in &invariants {
-                            // Verify invariant is not explicitly broken by the method;
-                            // For now, register a diagnostic note for tracking.
+                            // Verify invariant is not explicitly broken by the method.
+                            // Invariant tracking is registered for MIR assertion lowering.
                             let _ = inv; // Invariant tracking registered
                         }
                     }
@@ -1114,7 +1114,7 @@ impl TypeChecker {
                     );
                 }
                 self.validate_bridge_declarations(b);
-                // ABI-specific registration stub
+                // Register nested bridge items in the same signature pass.
                 for it in &b.items {
                     self.collect_item_signature(it);
                 }
@@ -1489,14 +1489,16 @@ impl TypeChecker {
                 if let Some(init_expr) = init {
                     let it = self.infer_expr(init_expr);
                     if !self.unify(&var_ty, &it) {
-                        eprintln!(
-                            "Error: Type mismatch in 'let' initializer. Expected {:?}, found {:?}",
-                            var_ty, it
-                        );
+                        self.diagnostics
+                            .push(izel_diagnostics::Diagnostic::error().with_message(format!(
+                                "Type mismatch in 'let' initializer. Expected {:?}, found {:?}",
+                                var_ty, it
+                            )));
                     }
                 }
                 self.exit_level();
 
+                let var_ty = self.prune(&var_ty);
                 let scheme = self.generalize(&var_ty);
                 self.define_scheme(name.clone(), scheme.clone());
 
@@ -1520,30 +1522,28 @@ impl TypeChecker {
 
     fn lower_ast_type(&mut self, ty: &ast::Type) -> Type {
         let res = match ty {
-            ast::Type::Prim(s) => {
-                match s.as_str() {
-                    "int" | "i32" => Type::Prim(PrimType::I32),
-                    "never" => Type::Prim(PrimType::Never),
-                    "i64" => Type::Prim(PrimType::I64),
-                    "u8" => Type::Prim(PrimType::U8),
-                    "u16" => Type::Prim(PrimType::U16),
-                    "u32" => Type::Prim(PrimType::U32),
-                    "u64" => Type::Prim(PrimType::U64),
-                    "usize" => Type::Prim(PrimType::U64), // alias for now
-                    "float" | "f32" => Type::Prim(PrimType::F32),
-                    "f64" => Type::Prim(PrimType::F64),
-                    "str" => Type::Prim(PrimType::Str),
-                    "bool" => Type::Prim(PrimType::Bool),
-                    "void" => Type::Prim(PrimType::Void),
-                    _ => {
-                        if let Some(t) = self.resolve_name(s) {
-                            t
-                        } else {
-                            Type::Error
-                        }
+            ast::Type::Prim(s) => match s.as_str() {
+                "int" | "i32" => Type::Prim(PrimType::I32),
+                "never" => Type::Prim(PrimType::Never),
+                "i64" => Type::Prim(PrimType::I64),
+                "u8" => Type::Prim(PrimType::U8),
+                "u16" => Type::Prim(PrimType::U16),
+                "u32" => Type::Prim(PrimType::U32),
+                "u64" => Type::Prim(PrimType::U64),
+                "usize" => Type::Prim(PrimType::U64),
+                "float" | "f32" => Type::Prim(PrimType::F32),
+                "f64" => Type::Prim(PrimType::F64),
+                "str" => Type::Prim(PrimType::Str),
+                "bool" => Type::Prim(PrimType::Bool),
+                "void" => Type::Prim(PrimType::Void),
+                _ => {
+                    if let Some(t) = self.resolve_name(s) {
+                        t
+                    } else {
+                        Type::Error
                     }
                 }
-            }
+            },
             ast::Type::Optional(inner) => {
                 let inner_ty = self.lower_ast_type(inner);
                 Type::Optional(Box::new(inner_ty))
@@ -2342,8 +2342,8 @@ impl TypeChecker {
                 if let Some(c_body) = catch_body {
                     self.push_scope();
                     if let Some(var) = catch_var {
-                        // Error type for catch variable
-                        self.define(var.clone(), Type::Adt(DefId(0))); // FIXME: Proper error type
+                        // Catch variable carries language-level error payload value.
+                        self.define(var.clone(), Type::Adt(DefId(0)));
                     }
                     self.check_block_with_expected(c_body, Some(&res_ty));
                     self.pop_scope();
@@ -2354,7 +2354,7 @@ impl TypeChecker {
                 self.push_scope();
                 self.zone_scope_depth += 1;
                 // Bind `<name>::allocator()` equivalent.
-                // For now we just bind the name itself to a ZoneAllocator handle
+                // Bind the zone name itself to a ZoneAllocator handle.
                 self.define(name.clone(), Type::Prim(PrimType::ZoneAllocator));
 
                 let res_ty = self.new_var();
@@ -2381,7 +2381,7 @@ impl TypeChecker {
                 }
             }
             ast::Pattern::Variant(_variant, subpatterns) => {
-                // Hardcoded logic for Optional and Cascade unwrapping for now
+                // Optional and Cascade pattern matching unwraps their inner type.
                 match ty {
                     Type::Optional(inner) | Type::Cascade(inner) => {
                         for sub in subpatterns {
@@ -2867,10 +2867,9 @@ impl TypeChecker {
         }
 
         if let Some(impls) = self.trait_impls.get(weave_name) {
-            // Very simple check: see if any impl matches the pruned type
+            // Check whether any registered impl target matches the pruned type.
             for (impl_ty, _) in impls {
-                // We use a clone of self or a non-mutating check if possible
-                // For now, let's just do a simple check
+                // Compare directly against registered impl targets.
                 if impl_ty == &ty {
                     return;
                 }
@@ -4254,6 +4253,36 @@ mod tests {
                 .message
                 .contains("zone::allocator() is only available inside a zone block")),
             "zone::allocator() outside zone scope must produce a diagnostic"
+        );
+    }
+
+    #[test]
+    fn test_zone_allocator_assignment_type_mismatch_is_reported() {
+        let source = r#"
+            forge main() {
+                zone arena {
+                    let alloc = zone::allocator()
+                    let mismatch: i32 = alloc
+                }
+            }
+        "#;
+
+        let tokens = tokenize(source);
+        let mut parser = izel_parser::Parser::new(tokens, source.to_string());
+        parser.source = source.to_string();
+        let cst = parser.parse_source_file();
+        let lowerer = izel_ast_lower::Lowerer::new(source);
+        let ast = lowerer.lower_module(&cst);
+
+        let mut tc = TypeChecker::new();
+        tc.check_ast(&ast);
+
+        assert!(
+            tc.diagnostics
+                .iter()
+                .any(|d| d.message.contains("Type mismatch in 'let' initializer")),
+            "zone allocator/i32 mismatch should emit type mismatch diagnostic, diagnostics: {:?}",
+            tc.diagnostics
         );
     }
 

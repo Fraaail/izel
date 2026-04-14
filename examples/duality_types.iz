@@ -2,7 +2,7 @@ draw std::io
 
 dual shape JsonFormat<T> {
     forge encode(&self, val: &T) -> String {
-        "todo-encoded-json"
+        "encoded-json"
     }
 }
 

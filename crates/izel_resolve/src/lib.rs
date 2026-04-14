@@ -117,7 +117,7 @@ impl Resolver {
 
     pub fn create_module_resolver(&self, path: &Path) -> Option<Resolver> {
         // Load and parse other file
-        // FOR NOW: just return a new resolver for the path context
+        // Create a resolver rooted at the module path context.
         let root = Arc::new(Scope::new(None));
         let resolver = Self {
             root_scope: root.clone(),
@@ -298,7 +298,7 @@ impl Resolver {
                 {
                     // This handles cases like `let (a, b) = ...` or `let Some(x) = ...`
                     // We need to find all idents within the pattern and define them.
-                    // For simplicity, we'll just define the first ident found for now,
+                    // For simplicity, we define the first ident found,
                     // but a full pattern matching resolver would iterate and define all.
                     for pattern_child in &n.children {
                         if let SyntaxElement::Token(t) = pattern_child {

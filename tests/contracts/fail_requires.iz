@@ -1,0 +1,8 @@
+@requires(n > 0)
+forge must_be_positive(n: i32) -> i32 {
+    n
+}
+
+forge main() -> i32 {
+    must_be_positive(0)
+}

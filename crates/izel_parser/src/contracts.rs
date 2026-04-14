@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_temporal_constraints() {
-        // Mock a function with @requires(n > 0)
+        // Build a function with @requires(n > 0)
         let n_ident = Box::new(ast::Expr::Ident("n".to_string(), Span::dummy()));
         let zero_lit = Box::new(ast::Expr::Literal(ast::Literal::Int(0)));
         let req = ast::Expr::Binary(ast::BinaryOp::Gt, n_ident.clone(), zero_lit.clone());

@@ -1,10 +1,21 @@
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn run_izel_pm(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_izel"))
+        .env("IZEL_PM_DRY_RUN", "1")
+        .args(args)
+        .output()
+        .expect("failed to execute izel_pm")
+}
+
+fn run_izel_pm_in(args: &[&str], cwd: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_izel"))
+        .env("IZEL_PM_DRY_RUN", "1")
+        .current_dir(cwd)
         .args(args)
         .output()
         .expect("failed to execute izel_pm")
@@ -41,7 +52,9 @@ fn cli_help_and_build_paths_are_callable() {
         "build command failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
-    assert!(String::from_utf8_lossy(&build.stdout).contains("Build command accepted"));
+    let build_out = String::from_utf8_lossy(&build.stdout);
+    assert!(build_out.contains("DRY-RUN: cargo build"));
+    assert!(build_out.contains("Build finished."));
 }
 
 #[test]
@@ -52,7 +65,9 @@ fn cli_run_paths_cover_empty_and_forwarded_args() {
         "run command failed: {}",
         String::from_utf8_lossy(&run_empty.stderr)
     );
-    assert!(String::from_utf8_lossy(&run_empty.stdout).contains("Run command accepted."));
+    let run_empty_out = String::from_utf8_lossy(&run_empty.stdout);
+    assert!(run_empty_out.contains("DRY-RUN: cargo run"));
+    assert!(run_empty_out.contains("Run finished."));
 
     let run_args = run_izel_pm(&["run", "--", "alpha", "beta"]);
     assert!(
@@ -60,7 +75,9 @@ fn cli_run_paths_cover_empty_and_forwarded_args() {
         "run with args failed: {}",
         String::from_utf8_lossy(&run_args.stderr)
     );
-    assert!(String::from_utf8_lossy(&run_args.stdout).contains("Run command accepted with args"));
+    let run_args_out = String::from_utf8_lossy(&run_args.stdout);
+    assert!(run_args_out.contains("DRY-RUN: cargo run -- alpha beta"));
+    assert!(run_args_out.contains("Run finished."));
 }
 
 #[test]
@@ -119,28 +136,21 @@ fn cli_all_subcommand_success_paths_are_callable() {
     let cases: Vec<(Vec<&str>, &str)> = vec![
         (
             vec!["build", "--release", "--target", "wasm32-unknown-unknown"],
-            "Build command accepted",
+            "Build finished.",
         ),
-        (vec!["test"], "Test command accepted"),
-        (
-            vec!["test", "lint", "--threads", "2"],
-            "Test command accepted",
-        ),
-        (vec!["bench", "pipeline"], "Bench command accepted"),
-        (vec!["check"], "Check command accepted"),
-        (vec!["fmt"], "Fmt command accepted"),
-        (vec!["fmt", "--check"], "Fmt command accepted"),
-        (vec!["lint"], "Lint command accepted"),
-        (vec!["doc"], "Doc command accepted"),
-        (vec!["doc", "--open"], "Doc command accepted"),
-        (vec!["add", "demo"], "Add command accepted"),
-        (vec!["add", "demo@1.2.3", "--dev"], "Add command accepted"),
-        (vec!["remove", "demo"], "Remove command accepted"),
-        (vec!["update"], "Update command accepted"),
-        (vec!["publish"], "Publish command accepted"),
-        (vec!["clean"], "Clean command accepted"),
-        (vec!["tree"], "Tree command accepted"),
-        (vec!["audit"], "Audit command accepted"),
+        (vec!["test"], "Tests finished."),
+        (vec!["test", "lint", "--threads", "2"], "Tests finished."),
+        (vec!["bench", "pipeline"], "Bench run finished."),
+        (vec!["check"], "Check finished."),
+        (vec!["fmt"], "Format task finished."),
+        (vec!["fmt", "--check"], "Format task finished."),
+        (vec!["lint"], "Lint finished."),
+        (vec!["doc"], "Documentation generated."),
+        (vec!["doc", "--open"], "Documentation generated."),
+        (vec!["update"], "Update finished."),
+        (vec!["publish"], "Publish dry-run finished."),
+        (vec!["clean"], "Clean finished."),
+        (vec!["tree"], "Dependency tree finished."),
         (vec!["new", &root_arg, "--bin"], "Created Izel project"),
         (vec!["new", &root_lib_arg, "--lib"], "Created Izel project"),
         (
@@ -163,6 +173,13 @@ fn cli_all_subcommand_success_paths_are_callable() {
             args,
             needle
         );
+        if args[0] != "new" {
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("DRY-RUN: cargo"),
+                "command {:?} should execute via cargo in dry-run mode",
+                args
+            );
+        }
     }
 
     assert!(root.join("src/main.iz").exists());
@@ -172,6 +189,49 @@ fn cli_all_subcommand_success_paths_are_callable() {
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&root_lib);
     let _ = fs::remove_dir_all(&root_ws);
+}
+
+#[test]
+fn cli_add_and_remove_update_manifest_dependencies() {
+    let root = unique_temp_path("manifest-edit");
+    fs::create_dir_all(&root).expect("temp root should be created");
+    let manifest = root.join("Izel.toml");
+    fs::write(
+        &manifest,
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nstd = \"1.0.0\"\n",
+    )
+    .expect("manifest should be written");
+
+    let add_out = run_izel_pm_in(&["add", "regex@1.11.0"], &root);
+    assert!(
+        add_out.status.success(),
+        "add command failed: {}",
+        String::from_utf8_lossy(&add_out.stderr)
+    );
+
+    let add_dev_out = run_izel_pm_in(&["add", "insta@1.39.0", "--dev"], &root);
+    assert!(
+        add_dev_out.status.success(),
+        "add --dev command failed: {}",
+        String::from_utf8_lossy(&add_dev_out.stderr)
+    );
+
+    let src_after_add = fs::read_to_string(&manifest).expect("manifest should be readable");
+    assert!(src_after_add.contains("regex = \"1.11.0\""));
+    assert!(src_after_add.contains("[dev-dependencies]"));
+    assert!(src_after_add.contains("insta = \"1.39.0\""));
+
+    let remove_out = run_izel_pm_in(&["remove", "regex"], &root);
+    assert!(
+        remove_out.status.success(),
+        "remove command failed: {}",
+        String::from_utf8_lossy(&remove_out.stderr)
+    );
+
+    let src_after_remove = fs::read_to_string(&manifest).expect("manifest should be readable");
+    assert!(!src_after_remove.contains("regex = \"1.11.0\""));
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

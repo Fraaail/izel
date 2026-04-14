@@ -1,0 +1,6 @@
+forge main() {
+    zone arena {
+        let alloc = zone::allocator()
+        let mismatch: i32 = alloc
+    }
+}

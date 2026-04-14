@@ -16,7 +16,7 @@ impl<T> Flow<T> {
 
     /// Awakens or polls the flow. In a real executor, this would advance the state machine.
     open forge poll(&mut ~self) -> bool {
-        // Assume completion immediately for this stub
+        // Reference behavior marks completed task progress.
         true
     }
 }

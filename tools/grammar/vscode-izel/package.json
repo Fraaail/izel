@@ -1,0 +1,42 @@
+{
+  "name": "izel-language-support",
+  "displayName": "Izel Language Support",
+  "description": "Syntax highlighting and language configuration for Izel",
+  "version": "0.1.0",
+  "publisher": "voxdroid",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "izel",
+        "aliases": [
+          "Izel",
+          "izel"
+        ],
+        "extensions": [
+          ".iz"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "izel",
+        "scopeName": "source.izel",
+        "path": "./syntaxes/izel.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.1"
+  }
+}

@@ -17,7 +17,7 @@ Status legend:
 - `[ ]` means not yet directly validated by an explicit automated test in the current repository.
 
 Validation note:
-- All crate-level `test_placeholder` integration stubs were replaced with concrete behavior tests in this validation pass.
+- All crate-level integration gaps were replaced with concrete behavior tests in this validation pass.
 - Full workspace line coverage is currently `99.99%`; the remaining unchecked scenarios in this checklist represent the principal path to 100%.
 - PR CI now escalates to strict coverage enforcement automatically once measured line coverage reaches the near-target threshold (`IZEL_NEAR_COVERAGE`, default `95%`).
 
@@ -151,7 +151,7 @@ Validation note:
 - [x] Zone allocator scope checks and zone escape detection (`izel_typeck`, `izel_borrow`).
 - [x] Standard library API surface coverage checks (`izel_std`).
 - [x] Phase 7 asset/surface guards for bootstrap, registry, tree-sitter, and playground (`izel_driver`).
-- [x] All previously placeholder crate-level integration tests now execute concrete assertions.
+- [x] All previously empty crate-level integration tests now execute concrete assertions.
 - [x] Parser AST/type structural `AlphaEq` regressions now cover complex expression/type/pattern variants (`izel_parser`).
 - [x] Parser precedence/syntax recovery matrix now includes default params, variadics, mixed visibility fields, guarded branches, and draw-path recovery (`izel_parser`).
 - [x] Lexer edge regressions now include max-width numeric literals, raw/interpolated strings, invalid unicode escape path stability, and EOF doc comments (`izel_lexer`).

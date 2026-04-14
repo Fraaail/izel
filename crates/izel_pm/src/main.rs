@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::process::{Command as ProcessCommand, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NewProjectKind {
@@ -358,81 +359,347 @@ fn create_project(name: &str, kind: NewProjectKind) -> io::Result<()> {
     Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    match parse_command(&args) {
-        Ok(Command::Help) => {
+fn is_dry_run() -> bool {
+    matches!(
+        env::var("IZEL_PM_DRY_RUN")
+            .ok()
+            .map(|v| v.to_ascii_lowercase())
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
+}
+
+fn run_external(program: &str, args: &[String]) -> Result<(), String> {
+    if is_dry_run() {
+        println!("DRY-RUN: {} {}", program, args.join(" "));
+        return Ok(());
+    }
+
+    let status = ProcessCommand::new(program)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("failed to run {}: {}", program, e))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} exited with status {}",
+            program,
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        ))
+    }
+}
+
+fn run_cargo(args: &[String]) -> Result<(), String> {
+    run_external("cargo", args)
+}
+
+fn project_root_manifest_path() -> std::path::PathBuf {
+    env::current_dir()
+        .unwrap_or_else(|_| Path::new(".").to_path_buf())
+        .join("Izel.toml")
+}
+
+fn upsert_dependency(manifest_src: &str, section: &str, package: &str, value: &str) -> String {
+    let mut lines: Vec<String> = manifest_src.lines().map(ToString::to_string).collect();
+    let section_header = format!("[{}]", section);
+
+    let mut sec_start = None;
+    for (idx, line) in lines.iter().enumerate() {
+        if line.trim() == section_header {
+            sec_start = Some(idx);
+            break;
+        }
+    }
+
+    if sec_start.is_none() {
+        if !lines.is_empty() && !lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push(section_header);
+        lines.push(format!("{} = {}", package, value));
+        return format!("{}\n", lines.join("\n"));
+    }
+
+    let start = sec_start.expect("section start must exist");
+    let mut end = lines.len();
+    for (idx, line) in lines.iter().enumerate().skip(start + 1) {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            end = idx;
+            break;
+        }
+    }
+
+    let key_prefix = package;
+    for line in lines.iter_mut().take(end).skip(start + 1) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(key_prefix)
+            && trimmed[key_prefix.len()..].trim_start().starts_with('=')
+        {
+            *line = format!("{} = {}", package, value);
+            return format!("{}\n", lines.join("\n"));
+        }
+    }
+
+    lines.insert(end, format!("{} = {}", package, value));
+    format!("{}\n", lines.join("\n"))
+}
+
+fn remove_dependency_from_section(manifest_src: &str, section: &str, package: &str) -> String {
+    let lines: Vec<String> = manifest_src.lines().map(ToString::to_string).collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let section_header = format!("[{}]", section);
+
+    let mut in_section = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == section_header;
+            out.push(line);
+            continue;
+        }
+
+        if in_section {
+            let left = line.split('=').next().map(str::trim).unwrap_or_default();
+            if left == package {
+                continue;
+            }
+        }
+        out.push(line);
+    }
+
+    format!("{}\n", out.join("\n"))
+}
+
+fn add_dependency_to_manifest(
+    package: &str,
+    version: Option<&str>,
+    dev: bool,
+) -> Result<(), String> {
+    let manifest_path = project_root_manifest_path();
+    let src = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", manifest_path.display(), e))?;
+    let section = if dev {
+        "dev-dependencies"
+    } else {
+        "dependencies"
+    };
+    let value = format!("\"{}\"", version.unwrap_or("*"));
+    let updated = upsert_dependency(&src, section, package, &value);
+    fs::write(&manifest_path, updated)
+        .map_err(|e| format!("failed to write {}: {}", manifest_path.display(), e))?;
+    println!(
+        "Updated {}: added {} to [{}]",
+        manifest_path.display(),
+        package,
+        section
+    );
+    Ok(())
+}
+
+fn remove_dependency_from_manifest(package: &str) -> Result<(), String> {
+    let manifest_path = project_root_manifest_path();
+    let src = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("failed to read {}: {}", manifest_path.display(), e))?;
+    let without_deps = remove_dependency_from_section(&src, "dependencies", package);
+    let updated = remove_dependency_from_section(&without_deps, "dev-dependencies", package);
+    fs::write(&manifest_path, updated)
+        .map_err(|e| format!("failed to write {}: {}", manifest_path.display(), e))?;
+    println!("Updated {}: removed {}", manifest_path.display(), package);
+    Ok(())
+}
+
+fn open_docs_if_requested(open: bool) -> Result<(), String> {
+    if !open {
+        return Ok(());
+    }
+
+    if is_dry_run() {
+        println!("DRY-RUN: opening target/doc/index.html");
+        return Ok(());
+    }
+
+    let index = Path::new("target/doc/index.html");
+    if !index.exists() {
+        return Err("documentation index not found at target/doc/index.html".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = ProcessCommand::new("open");
+        c.arg(index);
+        c
+    };
+
+    #[cfg(target_os = "linux")]
+    let mut cmd = {
+        let mut c = ProcessCommand::new("xdg-open");
+        c.arg(index);
+        c
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = ProcessCommand::new("cmd");
+        c.args(["/C", "start", "", &index.to_string_lossy()]);
+        c
+    };
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    cmd.spawn()
+        .map_err(|e| format!("failed to open docs in browser: {}", e))?;
+    Ok(())
+}
+
+fn execute_command(command: Command) -> Result<(), String> {
+    match command {
+        Command::Help => {
             println!("{}", usage());
+            Ok(())
         }
-        Ok(Command::New { name, kind }) => match create_project(&name, kind) {
-            Ok(()) => println!("Created Izel project: {}", name),
-            Err(e) => {
-                eprintln!("failed to create project {}: {}", name, e);
-                std::process::exit(1);
+        Command::New { name, kind } => {
+            create_project(&name, kind)
+                .map_err(|e| format!("failed to create project {}: {}", name, e))?;
+            println!("Created Izel project: {}", name);
+            Ok(())
+        }
+        Command::Build { release, target } => {
+            let mut args = vec!["build".to_string()];
+            if release {
+                args.push("--release".to_string());
             }
-        },
-        Ok(Command::Build { release, target }) => {
-            println!(
-                "Build command accepted. release={}, target={:?}",
-                release, target
-            );
-        }
-        Ok(Command::Run { args }) => {
-            if args.is_empty() {
-                println!("Run command accepted.");
-            } else {
-                println!("Run command accepted with args: {:?}", args);
+            if let Some(t) = target {
+                args.push("--target".to_string());
+                args.push(t);
             }
+            run_cargo(&args)?;
+            println!("Build finished.");
+            Ok(())
         }
-        Ok(Command::Test { filter, threads }) => {
-            println!(
-                "Test command accepted. filter={:?}, threads={:?}",
-                filter, threads
-            );
+        Command::Run { args } => {
+            let mut cargo_args = vec!["run".to_string()];
+            if !args.is_empty() {
+                cargo_args.push("--".to_string());
+                cargo_args.extend(args);
+            }
+            run_cargo(&cargo_args)?;
+            println!("Run finished.");
+            Ok(())
         }
-        Ok(Command::Bench { filter }) => {
-            println!("Bench command accepted. filter={:?}", filter);
+        Command::Test { filter, threads } => {
+            let mut args = vec!["test".to_string()];
+            if let Some(f) = filter {
+                args.push(f);
+            }
+            if let Some(n) = threads {
+                args.push("--".to_string());
+                args.push(format!("--test-threads={}", n));
+            }
+            run_cargo(&args)?;
+            println!("Tests finished.");
+            Ok(())
         }
-        Ok(Command::Check) => {
-            println!("Check command accepted.");
+        Command::Bench { filter } => {
+            let mut args = vec!["bench".to_string()];
+            if let Some(f) = filter {
+                args.push(f);
+            }
+            run_cargo(&args)?;
+            println!("Bench run finished.");
+            Ok(())
         }
-        Ok(Command::Fmt { check }) => {
-            println!("Fmt command accepted. check={}", check);
+        Command::Check => {
+            run_cargo(&["check".to_string()])?;
+            println!("Check finished.");
+            Ok(())
         }
-        Ok(Command::Lint) => {
-            println!("Lint command accepted.");
+        Command::Fmt { check } => {
+            let mut args = vec!["fmt".to_string()];
+            if check {
+                args.push("--".to_string());
+                args.push("--check".to_string());
+            }
+            run_cargo(&args)?;
+            println!("Format task finished.");
+            Ok(())
         }
-        Ok(Command::Doc { open }) => {
-            println!("Doc command accepted. open={}", open);
+        Command::Lint => {
+            let workspace_args = vec![
+                "clippy".to_string(),
+                "--workspace".to_string(),
+                "--all-targets".to_string(),
+                "--".to_string(),
+                "-D".to_string(),
+                "warnings".to_string(),
+            ];
+            if run_cargo(&workspace_args).is_err() {
+                run_cargo(&[
+                    "clippy".to_string(),
+                    "--".to_string(),
+                    "-D".to_string(),
+                    "warnings".to_string(),
+                ])?;
+            }
+            println!("Lint finished.");
+            Ok(())
         }
-        Ok(Command::Add {
+        Command::Doc { open } => {
+            run_cargo(&["doc".to_string(), "--no-deps".to_string()])?;
+            open_docs_if_requested(open)?;
+            println!("Documentation generated.");
+            Ok(())
+        }
+        Command::Add {
             package,
             version,
             dev,
-        }) => {
-            println!(
-                "Add command accepted. package={}, version={:?}, dev={}",
-                package, version, dev
-            );
+        } => add_dependency_to_manifest(&package, version.as_deref(), dev),
+        Command::Remove { package } => remove_dependency_from_manifest(&package),
+        Command::Update => {
+            run_cargo(&["update".to_string()])?;
+            println!("Update finished.");
+            Ok(())
         }
-        Ok(Command::Remove { package }) => {
-            println!("Remove command accepted. package={}", package);
+        Command::Publish => {
+            run_cargo(&["publish".to_string(), "--dry-run".to_string()])?;
+            println!("Publish dry-run finished.");
+            Ok(())
         }
-        Ok(Command::Update) => {
-            println!("Update command accepted.");
+        Command::Clean => {
+            run_cargo(&["clean".to_string()])?;
+            println!("Clean finished.");
+            Ok(())
         }
-        Ok(Command::Publish) => {
-            println!("Publish command accepted.");
+        Command::Tree => {
+            run_cargo(&["tree".to_string()])?;
+            println!("Dependency tree finished.");
+            Ok(())
         }
-        Ok(Command::Clean) => {
-            println!("Clean command accepted.");
+        Command::Audit => {
+            if run_external("cargo", &["audit".to_string()]).is_err() {
+                return Err("cargo-audit is not installed. Install with `cargo install cargo-audit --locked`".to_string());
+            }
+            println!("Audit finished.");
+            Ok(())
         }
-        Ok(Command::Tree) => {
-            println!("Tree command accepted.");
-        }
-        Ok(Command::Audit) => {
-            println!("Audit command accepted.");
-        }
+    }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    match parse_command(&args).and_then(execute_command) {
+        Ok(()) => {}
         Err(msg) => {
             eprintln!("{}\n{}", msg, usage());
             std::process::exit(2);
@@ -729,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn create_bin_project_writes_manifest_and_main_stub() {
+    fn create_bin_project_writes_manifest_and_main_file() {
         let root = temp_project_root("create-project");
         let root_str = root.to_string_lossy().to_string();
 
@@ -752,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn create_lib_project_writes_library_stub() {
+    fn create_lib_project_writes_library_file() {
         let root = temp_project_root("create-lib");
         let root_str = root.to_string_lossy().to_string();
 

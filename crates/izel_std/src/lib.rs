@@ -417,7 +417,7 @@ mod tests {
             (
                 "mock.iz",
                 &[
-                    "Mockable weave stubs for effect testing",
+                    "Mocking weave declarations for effect testing",
                     "weave MockEffect",
                 ],
             ),

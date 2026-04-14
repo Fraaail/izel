@@ -251,7 +251,7 @@ impl<'a> Lowerer<'a> {
                     generic_params = self.lower_generic_params(n);
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::ParamPart => {
-                    // Simple param parsing for now
+                    // Parse parameter entries in declaration order.
                     params.push(self.lower_param(n));
                 }
                 SyntaxElement::Node(n) if n.kind == NodeKind::Effect => {
@@ -1197,18 +1197,25 @@ impl<'a> Lowerer<'a> {
                 ast::Expr::Member(Box::new(target), name, node.span())
             }
             NodeKind::PathExpr => {
-                fn collect_path_idents(node: &SyntaxNode, source: &str, out: &mut Vec<String>) {
+                fn collect_path_idents(
+                    node: &SyntaxNode,
+                    lowerer: &Lowerer<'_>,
+                    source: &str,
+                    out: &mut Vec<String>,
+                ) {
                     for child in &node.children {
                         match child {
-                            SyntaxElement::Token(t) if t.kind == TokenKind::Ident => {
+                            SyntaxElement::Token(t) if lowerer.is_naming_ident(t.kind) => {
                                 out.push(
                                     source[t.span.lo.0 as usize..t.span.hi.0 as usize].to_string(),
                                 );
                             }
                             SyntaxElement::Node(n)
-                                if n.kind == NodeKind::Ident || n.kind == NodeKind::PathExpr =>
+                                if n.kind == NodeKind::Ident
+                                    || n.kind == NodeKind::PathExpr
+                                    || n.kind == NodeKind::ZoneExpr =>
                             {
-                                collect_path_idents(n, source, out);
+                                collect_path_idents(n, lowerer, source, out);
                             }
                             _ => {}
                         }
@@ -1217,7 +1224,7 @@ impl<'a> Lowerer<'a> {
 
                 let mut path = Vec::new();
                 let mut generic_args = Vec::new();
-                collect_path_idents(node, self.source, &mut path);
+                collect_path_idents(node, self, self.source, &mut path);
                 for child in &node.children {
                     if let SyntaxElement::Node(n) = child {
                         if n.kind == NodeKind::GenericArgs {

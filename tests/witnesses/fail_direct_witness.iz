@@ -1,0 +1,4 @@
+forge main() {
+    let raw_num = 5
+    let bad: Witness<i32> = raw_num
+}

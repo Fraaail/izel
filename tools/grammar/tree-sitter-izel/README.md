@@ -1,6 +1,6 @@
 # tree-sitter-izel
 
-Tree-sitter grammar scaffold for Izel syntax highlighting and editor integration.
+Tree-sitter grammar for Izel syntax highlighting and editor integration.
 
 ## Scope
 
@@ -22,4 +22,4 @@ npm run test
 
 ## Notes
 
-This is the initial broad-editor-support grammar milestone. The rule set is intentionally conservative and will be expanded as language coverage grows.
+The grammar focuses on stable core syntax used by compiler tests and examples.

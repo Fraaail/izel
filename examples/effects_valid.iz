@@ -1,0 +1,10 @@
+forge read_sensor() !io {
+}
+
+forge collect() !io {
+    read_sensor()
+}
+
+forge main() !io {
+    collect()
+}

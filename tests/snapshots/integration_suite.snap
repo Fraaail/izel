@@ -1,4 +1,12 @@
 # Integration Snapshot
 PASS driver_custom_iterator tokens=200 diagnostics=0 status=ok
 PASS driver_custom_witness tokens=109 diagnostics=0 status=ok
+PASS contracts_pass_requires tokens=64 diagnostics=0 status=ok
+PASS effects_pass_declared_io tokens=31 diagnostics=0 status=ok
+PASS witnesses_pass_proof_construction tokens=82 diagnostics=0 status=ok
+PASS zones_pass_zone_allocator tokens=31 diagnostics=0 status=ok
 FAIL effects_violation tokens=28 diagnostics=1 status=diag first_diag=Function has effects Row([IO], Var(2)) but only declared Concrete([Pure])
+FAIL contracts_fail_requires tokens=50 diagnostics=1 status=diag first_diag=precondition violation for 'must_be_positive'
+FAIL effects_fail_pure_boundary tokens=31 diagnostics=1 status=diag first_diag=Function has effects Row([IO], Var(2)) but only declared Concrete([Pure])
+FAIL witnesses_fail_direct_witness tokens=33 diagnostics=1 status=diag first_diag=Type mismatch in 'let' initializer. Expected Witness(Prim(I32)), found Prim(I32)
+FAIL zones_fail_zone_allocator_scope tokens=42 diagnostics=1 status=diag first_diag=Type mismatch in 'let' initializer. Expected Prim(I32), found Prim(ZoneAllocator)

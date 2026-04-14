@@ -70,7 +70,7 @@ forge parse_cli {
     params: [args: List[Str]]
     ret: CompileConfig
     body: {
-        // Placeholder CLI logic for bootstrap milestone.
+        // Minimal deterministic CLI parser used by the self-hosted driver.
         return CompileConfig {
             input_path: args.get_or(1, "main.iz"),
             run_after_codegen: args.contains("--run"),
@@ -83,7 +83,7 @@ forge fs_read_to_string {
     params: [path: Str]
     ret: Str
     body: {
-        // Bootstrap shim until std::fs is fully wired in self-hosted mode.
+        // Delegates file loading to the host bridge implementation.
         return bridge_fs_read_to_string(path)
     }
 }

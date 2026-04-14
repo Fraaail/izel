@@ -1,0 +1,12 @@
+@proof forge prove_positive(n: i32) -> Witness<i32> {
+    raw n
+}
+
+forge consume(w: Witness<i32>) -> i32 {
+    w
+}
+
+forge main() -> i32 {
+    let proof = prove_positive(4)
+    consume(proof)
+}

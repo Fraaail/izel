@@ -49,7 +49,7 @@ pub fn parse_manifest(input: &str) -> Result<Manifest, String> {
     }
 }
 
-// A highly simplified TOML parser using winnow, sufficient for Phase 5.3 scaffolding
+// TOML parser for Izel manifests using a focused key/value section grammar.
 fn manifest(input: &mut &str) -> ModalResult<Manifest> {
     let mut package = PackageInfo {
         name: String::new(),
@@ -97,7 +97,7 @@ fn manifest(input: &mut &str) -> ModalResult<Manifest> {
                 }
             }
             "dependencies" => {
-                // If it starts with {, it's likely a path or complex. Simpler fallback for now.
+                // Inline-table dependency values are treated as path/complex specs.
                 if value.contains("path") {
                     dependencies.insert(key.to_string(), Dependency::Path(value.to_string()));
                 } else {

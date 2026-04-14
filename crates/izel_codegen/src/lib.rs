@@ -427,7 +427,7 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
             mir_codegen.gen_mir_body(function, body)?;
         } else if f.body.is_some() {
             // If we have a body but no MIR, it might be an issue or just not lowered yet
-            // For now, we only support MIR-driven bodies for real execution
+            // Execution currently consumes MIR-lowered bodies.
         }
 
         Ok(function)
@@ -563,7 +563,7 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
             .context
             .i8_type()
             .ptr_type(inkwell::AddressSpace::from(0));
-        let size_type = self.context.i64_type(); // Assuming 64-bit size_t for now
+        let size_type = self.context.i64_type(); // Runtime ABI uses 64-bit size_t.
         let fn_type = ptr_type.fn_type(&[size_type.into()], false);
         Ok(self.module.add_function("malloc", fn_type, None))
     }

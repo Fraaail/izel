@@ -1,49 +1,127 @@
-# ⬡ IZEL — *Only One*
+# IZEL
 
-**Izel** (from Nahuatl: *izel* — "unique", "one of a kind", "only one") is a compiled, multi-paradigm systems programming language built entirely in Rust.
+Izel is a compiled systems programming language implemented in Rust, with first-class effect tracking, witness types, and zone-based memory semantics.
 
-## Vision
-To create a systems programming language that gives developers absolute control over hardware while introducing novel constructs like **Effect Systems**, **Witness Types**, and **Memory Zones**.
+This repository contains the compiler, toolchain, standard library wards, language server, formatter, package manager, and playground.
 
-## Current Status: Active Multi-Phase Prototype
-The repository now contains a working multi-crate compiler/tooling pipeline (lexer, parser,
-resolver, AST lowerer, type checker, borrow checker, MIR, LLVM codegen, formatter, LSP, package
-manager). See [Implementation Checklist](docs/checklist.md) for roadmap-level tracking and
-[Tests Checklist](docs/tests_checklist.md) for validation depth.
+## Repository Layout
 
-## Getting Started
+- `crates/`: compiler and toolchain crates.
+- `examples/`: runnable Izel source examples.
+- `library/std/` and `std/`: standard library ward sources.
+- `tests/`: integration, compile-pass/fail, and feature-specific fixtures.
+- `docs/`: book chapters, reference/spec content, and project overviews.
+- `tools/`: grammar, playground, CI helpers, bootstrap utilities.
 
-### Prerequisites
-- Rust (latest stable)
-- LLVM 17 (required for `inkwell`/`llvm-sys`)
-- CMake 3.20+
+## Prerequisites
 
-On macOS:
+- Rust toolchain (workspace default in `rust-toolchain.toml`).
+- LLVM 17 (`llvm-config`, `clang`, `lld`) for LLVM-backed codegen crates.
+- `cmake` for native dependency builds.
+
+macOS setup:
 
 ```bash
 brew install llvm@17 cmake
 ```
 
-Verify dependencies:
+Validate system dependencies:
 
 ```bash
 bash tools/ci/check_system_deps.sh
 ```
 
-### Build
+## Build
+
 ```bash
 bash tools/ci/with_llvm_env.sh cargo build --workspace
 ```
 
-### Run Compiler
+## Compile and Run Izel Code
+
+Compile through the driver frontend/codegen path:
+
 ```bash
-bash tools/ci/with_llvm_env.sh cargo run --bin izelc -- examples/hello.iz
+bash tools/ci/with_llvm_env.sh cargo run -p izel_driver -- examples/hello.iz
 ```
 
-## Contributing
-Please see the [Project Overview](docs/project_overview.md) for the full language specification and design philosophy.
+Format an Izel source file:
 
----
-**Creator:** VoxDroid (@VoxDroid)  
-**Email:** izeno.contact@gmail.com  
-**License:** MIT
+```bash
+cargo run -p izel_driver -- fmt examples/hello.iz
+```
+
+Run the package manager entrypoint:
+
+```bash
+cargo run -p izel_pm -- new demo --bin
+cd demo
+cargo run -p izel_pm -- build
+```
+
+## Validation Commands
+
+Use these before release or pull requests:
+
+```bash
+pre-commit run --all-files
+bash tools/ci/with_llvm_env.sh cargo check --workspace --all-targets
+bash tools/ci/with_llvm_env.sh cargo test --workspace
+cargo fmt --all -- --check
+bash tools/ci/with_llvm_env.sh cargo clippy --workspace --all-targets -- -D warnings
+```
+
+## Example Programs
+
+Feature-focused examples live under `examples/`, including:
+
+- `hello.iz`
+- `effects_valid.iz`
+- `contracts_valid.iz`
+- `witness_valid.iz`
+- `zones_valid.iz`
+- `temporal_constraints.iz`
+
+## Browser Playground (WASM)
+
+Build and run the playground:
+
+```bash
+cd tools/playground
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --locked
+npm install
+npm run build:wasm
+npm run serve
+```
+
+Then open `http://localhost:4173`.
+
+## Syntax Highlighting (VS Code)
+
+An installable VS Code package is provided at `tools/grammar/vscode-izel`.
+
+Build a VSIX locally:
+
+```bash
+cd tools/grammar/vscode-izel
+npm install
+npm run package
+```
+
+Install in VS Code:
+
+```bash
+code --install-extension <generated-file>.vsix
+```
+
+## Documentation
+
+- Book: `docs/book/`
+- Reference/spec: `docs/reference/`, `docs/spec/`
+- Project overview: `docs/project_overview.md`
+- Verification checklists: `docs/po_checklist.md`, `docs/tests_checklist.md`
+
+## License
+
+MIT.

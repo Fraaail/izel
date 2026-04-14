@@ -1,0 +1,9 @@
+@requires(n >= 0)
+@ensures(result >= n)
+forge next_step(n: i32) -> i32 {
+    n + 1
+}
+
+forge main() -> i32 {
+    next_step(10)
+}

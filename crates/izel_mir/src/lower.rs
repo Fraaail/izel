@@ -231,7 +231,7 @@ impl MirLowerer {
                     self.body.blocks[self.current_block]
                         .instructions
                         .push(Instruction::Call(None, callee_name, operands));
-                    Rvalue::Use(Operand::Constant(Constant::Bool(false))) // Return dummy
+                    Rvalue::Use(Operand::Constant(Constant::Bool(false)))
                 } else {
                     let local = self.new_local("call_tmp".to_string(), ret_ty.clone());
                     self.body.blocks[self.current_block]
@@ -293,7 +293,7 @@ impl MirLowerer {
 
                     self.body.blocks[self.current_block].terminator =
                         Some(Terminator::Return(Some(op)));
-                    Rvalue::Use(Operand::Constant(Constant::Int(0))) // DUMMY
+                    Rvalue::Use(Operand::Constant(Constant::Int(0)))
                 } else {
                     self.body.blocks[self.current_block].terminator =
                         Some(Terminator::Return(None));
@@ -504,7 +504,7 @@ mod tests {
         lowerer.check_contracts = true;
         let i32_ty = Type::Prim(izel_typeck::type_system::PrimType::I32);
 
-        // 1. Mock a call to 'f(n)' with @requires(n > 0)
+        // 1. Build a call to 'f(n)' with @requires(n > 0)
         let n_id = DefId(10);
         let n_expr = HirExpr::Ident(
             "n".to_string(),

@@ -1,10 +1,6 @@
 // examples/async_test.iz
 
-// We will simulate drawing the channel module, assuming the compiler load order handles std.
-// Actually, Izel typically loads all modules automatically if configured, or we can just test the syntax manually if std::chan is not auto-loaded.
-
-// For now, let's just write the code. We can define the channel dummy structures inline if std isn't loaded by the driver yet.
-// Since we wrote library/std/chan.iz, it might be picked up.
+// Minimal async/tide syntax coverage fixture.
 
 shape Result<T, E> {
     is_ok: bool,
@@ -31,9 +27,7 @@ flow forge main() {
     // 3. Let's make sure tide is parsed as a Unary Expr and works.
     let double_async = tide fetch_data_async() + tide fetch_data_async()
 
-    // 4. (Optional) Testing channel syntactically
-    // The driver may not load `library/std/chan.iz` automatically in our simple test environment, 
-    // so we'll just check if `tide` and `flow` compile securely.
+    // 4. Keep this fixture focused on `flow` + `tide` behavior.
 }
 
 // 5. This should trigger an error because `tide` is outside a `flow` forge:

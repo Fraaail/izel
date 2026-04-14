@@ -1,0 +1,9 @@
+@requires(n >= 0)
+@ensures(result >= n)
+forge inc_checked(n: i32) -> i32 {
+    n + 1
+}
+
+forge main() -> i32 {
+    inc_checked(1)
+}

@@ -1,0 +1,5 @@
+forge main() -> i32 {
+    let numerator: i32 = 1
+    let denominator: i32 = 0
+    numerator / denominator
+}

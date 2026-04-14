@@ -80,11 +80,45 @@ fn render_suite_summary() -> Result<String> {
             "driver_custom_witness",
             root.join("crates/izel_driver/tests/fixtures/custom_witness.iz"),
         ),
+        (
+            "contracts_pass_requires",
+            root.join("tests/contracts/pass_requires.iz"),
+        ),
+        (
+            "effects_pass_declared_io",
+            root.join("tests/effects/pass_declared_io.iz"),
+        ),
+        (
+            "witnesses_pass_proof_construction",
+            root.join("tests/witnesses/pass_proof_construction.iz"),
+        ),
+        (
+            "zones_pass_zone_allocator",
+            root.join("tests/zones/pass_zone_allocator.iz"),
+        ),
     ];
-    let fail_cases = vec![(
-        "effects_violation",
-        root.join("tests/compile_fail/effects_violation.iz"),
-    )];
+    let fail_cases = vec![
+        (
+            "effects_violation",
+            root.join("tests/compile_fail/effects_violation.iz"),
+        ),
+        (
+            "contracts_fail_requires",
+            root.join("tests/contracts/fail_requires.iz"),
+        ),
+        (
+            "effects_fail_pure_boundary",
+            root.join("tests/effects/fail_pure_boundary.iz"),
+        ),
+        (
+            "witnesses_fail_direct_witness",
+            root.join("tests/witnesses/fail_direct_witness.iz"),
+        ),
+        (
+            "zones_fail_zone_allocator_scope",
+            root.join("tests/zones/fail_zone_allocator_scope.iz"),
+        ),
+    ];
 
     let mut out = String::new();
     out.push_str("# Integration Snapshot\n");
@@ -175,5 +209,42 @@ fn test_snapshot_integration_suite() -> Result<()> {
     let expected = fs::read_to_string(snapshot_path)?;
     let actual = render_suite_summary()?;
     assert_eq!(actual, expected, "integration snapshot mismatch");
+    Ok(())
+}
+
+#[test]
+fn test_category_fixture_directories_are_populated() -> Result<()> {
+    let root = repo_root();
+    let iz_fixture_dirs = [
+        root.join("tests/contracts"),
+        root.join("tests/effects"),
+        root.join("tests/witnesses"),
+        root.join("tests/zones"),
+        root.join("tests/compile_pass"),
+        root.join("tests/run_pass"),
+        root.join("tests/run_fail"),
+    ];
+
+    for dir in iz_fixture_dirs {
+        let iz_count = fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "iz"))
+            .count();
+
+        assert!(
+            iz_count > 0,
+            "expected at least one .iz fixture in {:?}",
+            dir
+        );
+    }
+
+    let snapshot = root.join("tests/snapshots/integration_suite.snap");
+    assert!(
+        snapshot.exists(),
+        "expected snapshot file at {:?}",
+        snapshot
+    );
+
     Ok(())
 }

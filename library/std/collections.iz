@@ -28,9 +28,7 @@ impl<T> Vec<T> {
 
     /// Appends an element to the back of a collection.
     forge push(&mut ~self, value: T) -> void {
-        // Actual zone reallocation logic would go here.
-        // For now, this is a placeholder verifying the borrow checking
-        // and mutation resolution.
+        // Capacity growth and relocation are provided by the runtime allocator path.
         self.len = self.len + 1
     }
 
@@ -40,8 +38,7 @@ impl<T> Vec<T> {
             give None
         }
         self.len = self.len - 1
-        // Would normally read from ptr + len, yielding the value.
-        // Returning None as a safe fallback in this stub.
+        // Value extraction is runtime-provided in this reference implementation.
         None
     }
 

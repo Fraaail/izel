@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Izel",
+  "scopeName": "source.izel",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#attributes" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.izel",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.izel",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.izel",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.izel",
+          "match": "\\b(?:0x[0-9a-fA-F_]+|0b[01_]+|\\d[\\d_]*)\\b"
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "storage.modifier.attribute.izel",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "meta.attribute.bracket.izel",
+          "begin": "#\\[",
+          "end": "\\]"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.izel",
+          "match": "\\b(?:forge|shape|scroll|weave|ward|echo|branch|given|else|loop|each|while|break|next|give|let|raw|bridge|flow|tide|zone|dual|seek|catch|draw|impl|type|macro|static|extern|open|hidden|pkg|pure|sole|comptime|in|as|and|or|not)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.izel",
+          "match": "\\b(?:i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|bool|str|void|int|float|usize|Self|self)\\b"
+        },
+        {
+          "name": "support.type.izel",
+          "match": "\\b(?:Witness|Result|Option)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.izel",
+          "match": "\\bforge\\s+([A-Za-z_][A-Za-z0-9_]*)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.izel",
+          "match": "\\|>|::|->|=>|\\.\\.=|\\.\\.|[+\\-*/=<>!&|?:]"
+        }
+      ]
+    }
+  }
+}

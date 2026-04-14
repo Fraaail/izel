@@ -76,10 +76,50 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    fn byte_to_position(source: &str, byte_index: usize) -> Position {
+        let mut line = 0u32;
+        let mut col = 0u32;
+
+        for (idx, ch) in source.char_indices() {
+            if idx >= byte_index {
+                break;
+            }
+
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+
+        Position::new(line, col)
+    }
+
+    fn range_from_bytes(source: &str, start: usize, end: usize) -> Range {
+        let capped_start = start.min(source.len());
+        let capped_end = end.min(source.len()).max(capped_start);
+        Range::new(
+            Self::byte_to_position(source, capped_start),
+            Self::byte_to_position(source, capped_end),
+        )
+    }
+
+    fn fallback_range(source: &str) -> Range {
+        if source.is_empty() {
+            return Range::default();
+        }
+
+        Range::new(
+            Position::new(0, 0),
+            Self::byte_to_position(source, source.len()),
+        )
+    }
+
     fn build_diagnostics(source: &str) -> Vec<Diagnostic> {
         let mut diagnostics = vec![];
 
-        let source_id = izel_span::SourceId(1); // Mock Source ID
+        let source_id = izel_span::SourceId(1);
         let mut lexer = izel_lexer::Lexer::new(source, source_id);
 
         let mut tokens = Vec::new();
@@ -103,9 +143,18 @@ impl Backend {
 
         if !typeck.diagnostics.is_empty() {
             for diag in &typeck.diagnostics {
-                // Approximate line mapping could happen here. Leaving as minimal for scaffolding.
+                let mut range = diag
+                    .labels
+                    .first()
+                    .map(|label| Self::range_from_bytes(source, label.range.start, label.range.end))
+                    .unwrap_or_else(|| Self::fallback_range(source));
+
+                if range == Range::default() && !source.is_empty() {
+                    range = Self::fallback_range(source);
+                }
+
                 diagnostics.push(Diagnostic {
-                    range: Range::default(), // Dummy range
+                    range,
                     severity: Some(DiagnosticSeverity::ERROR),
                     message: diag.message.clone(),
                     ..Default::default()
@@ -237,6 +286,10 @@ mod tests {
             bad.iter()
                 .any(|d| d.message.contains("requires an initializer")),
             "invalid echo should produce a diagnostic"
+        );
+        assert!(
+            bad.iter().any(|d| d.range != Range::default()),
+            "invalid echo should produce mapped source ranges"
         );
     }
 

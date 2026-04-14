@@ -1,0 +1,6 @@
+forge io_step() !io {
+}
+
+forge main() !pure {
+    io_step()
+}

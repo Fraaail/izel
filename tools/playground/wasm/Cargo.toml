@@ -10,3 +10,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
+izel_span = { path = "../../../crates/izel_span" }
+izel_lexer = { path = "../../../crates/izel_lexer" }
+izel_parser = { path = "../../../crates/izel_parser" }
+izel_ast_lower = { path = "../../../crates/izel_ast_lower" }
+izel_typeck = { path = "../../../crates/izel_typeck" }
+
+[workspace]
