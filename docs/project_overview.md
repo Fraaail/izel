@@ -1931,18 +1931,18 @@ path = "src/main.iz"
 | Feature | Description |
 |---------|-------------|
 | Diagnostics | Front-end parse/type-check diagnostics are published on open/change |
-| Hover | Hover endpoint is wired and currently returns a basic placeholder response |
-| Completion | Completion items are produced from core keywords/modules and document-local symbols |
-| Go to Definition | Available with document-local lexical symbol matching |
-| References | Available with document-local lexical symbol matching |
-| Rename | Prepare/rename endpoints are available for document-local symbol edits |
+| Hover | Resolver/type-aware hover shows symbol kind, inferred type (when available), and definition locations |
+| Completion | Completion items include core keywords/modules plus resolver/type-enriched symbols with origin metadata |
+| Go to Definition | Available across open/workspace `.iz` documents via cross-file symbol indexing |
+| References | Available across open/workspace `.iz` documents with declaration filtering |
+| Rename | Prepare/rename endpoints apply workspace edits across matching open/workspace `.iz` documents |
 | Code Actions | Quick fix placeholders and source format action are available |
 | Inlay Hints | Placeholder type hints are available for unannotated `let` bindings |
 | Semantic Tokens | Full and range semantic tokens are available from lexer token categories |
 | Formatting | Whole-document and range formatting are available via `izel-fmt` |
 
-Current LSP language intelligence is intentionally conservative and document-local in this phase.
-Later increments can layer resolver/type-aware cross-file semantics and richer hover/completion data.
+Current LSP language intelligence now layers resolver and type-checker analysis for richer hover/completion and cross-file navigation.
+Further increments can deepen precision for module graph semantics and non-open workspace synchronization.
 
 ### `izel-fmt` — Formatter
 
