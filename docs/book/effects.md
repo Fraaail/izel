@@ -1,3 +1,7 @@
-# The Effect System
+# Effects Chapter Redirect
 
-This chapter will overview the Effect system in Izel...
+Primary chapter:
+- `docs/book/04-effects.md`
+
+Normative companion:
+- `docs/spec/04-effects.md`

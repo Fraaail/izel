@@ -1,1 +1,7 @@
-// Placeholder test file
+forge may_io() !io {
+	give 1
+}
+
+forge caller_without_effect() -> i32 {
+	may_io()
+}

@@ -1,9 +1,17 @@
-# The Izel Language Book
+# Book Entry Note
 
-## Welcome to Izel
-Izel is a high-performance system language that marries mathematical rigor with practical efficiency. This book is designed to guide you from your first "Hello World" to building complex, safe systems.
+The canonical introductory chapter is now:
+- `docs/book/00-intro.md`
 
-### What Makes Izel Unique?
--   **No Garbage Collection**: Manual memory management with safety guarantees.
--   **Effect Tracking**: Static verification of side effects.
--   **Dual Types**: Seamless integration of shapes and their logic.
+This file remains as a lightweight compatibility entry point for older links.
+
+Recommended reading order:
+1. `00-intro.md`
+2. `01-getting-started.md`
+3. `02-ownership.md`
+4. `03-types.md`
+5. `04-effects.md`
+6. `05-witnesses.md`
+7. `06-zones.md`
+8. `07-concurrency.md`
+9. `08-ffi.md`
