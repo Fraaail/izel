@@ -1,0 +1,3 @@
+# GitHub Linguist overrides for Izel source files.
+*.iz linguist-language=Izel linguist-detectable=true linguist-vendored=false linguist-generated=false
+*.izm linguist-language=Izel linguist-detectable=true linguist-vendored=false linguist-generated=false
