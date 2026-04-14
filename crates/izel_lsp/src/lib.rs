@@ -624,6 +624,40 @@ impl Backend {
         }
     }
 
+    fn draw_dependencies(source: &str, module_names: &HashSet<String>) -> HashSet<String> {
+        let tokens = Self::lex_tokens_with_source_id(source, izel_span::SourceId(0));
+        let mut dependencies = HashSet::new();
+
+        let mut idx = 0usize;
+        while idx < tokens.len() {
+            if tokens[idx].kind != TokenKind::Draw {
+                idx += 1;
+                continue;
+            }
+
+            let mut cursor = idx + 1;
+            while cursor < tokens.len() {
+                match tokens[cursor].kind {
+                    TokenKind::Whitespace | TokenKind::Comment | TokenKind::DoubleColon => {
+                        cursor += 1;
+                    }
+                    TokenKind::Ident => {
+                        let name = Self::source_slice(source, &tokens[cursor]).to_string();
+                        if module_names.contains(&name) {
+                            dependencies.insert(name);
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+
+            idx = cursor.saturating_add(1);
+        }
+
+        dependencies
+    }
+
     fn analyze_documents(documents: Vec<(Url, String)>) -> Vec<DocumentAnalysis> {
         if documents.is_empty() {
             return Vec::new();
@@ -679,10 +713,56 @@ impl Backend {
             );
         }
 
-        let module_entries = module_scopes
+        let mut module_entries = module_scopes
             .iter()
             .map(|(name, scope)| (name.clone(), scope.clone()))
             .collect::<Vec<_>>();
+        module_entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let module_names = parsed_docs
+            .iter()
+            .map(|parsed| parsed.module_name.clone())
+            .collect::<HashSet<_>>();
+        let mut dependencies = HashMap::<String, HashSet<String>>::new();
+        for parsed in &parsed_docs {
+            dependencies.insert(
+                parsed.module_name.clone(),
+                Self::draw_dependencies(&parsed.source, &module_names),
+            );
+        }
+
+        let mut pending = module_names.clone();
+        let mut ordered_module_names = Vec::<String>::new();
+        while !pending.is_empty() {
+            let mut candidates = pending.iter().cloned().collect::<Vec<_>>();
+            candidates.sort();
+
+            let mut progressed = false;
+            for name in candidates {
+                let deps = dependencies.get(&name).cloned().unwrap_or_default();
+                let ready = deps
+                    .iter()
+                    .all(|dep| dep == &name || !pending.contains(dep));
+                if ready {
+                    pending.remove(&name);
+                    ordered_module_names.push(name);
+                    progressed = true;
+                }
+            }
+
+            if !progressed {
+                let mut remaining = pending.iter().cloned().collect::<Vec<_>>();
+                remaining.sort();
+                ordered_module_names.extend(remaining);
+                break;
+            }
+        }
+        let module_index = parsed_docs
+            .iter()
+            .enumerate()
+            .map(|(idx, parsed)| (parsed.module_name.clone(), idx))
+            .collect::<HashMap<_, _>>();
+
         for (name, scope) in &module_entries {
             let module_def_id = resolver.next_id();
             resolver.root_scope.define_module(
@@ -701,17 +781,20 @@ impl Backend {
             }
         }
 
-        for parsed in &parsed_docs {
-            if let Some(scope) = module_scopes.get(&parsed.module_name).cloned() {
-                let previous_scope = resolver.current_scope.clone();
-                resolver.current_scope = scope;
-                resolver.base_path = parsed
-                    .uri
-                    .to_file_path()
-                    .ok()
-                    .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-                resolver.resolve_source_file(&parsed.cst, &parsed.source);
-                resolver.current_scope = previous_scope;
+        for module_name in &ordered_module_names {
+            if let Some(parsed_idx) = module_index.get(module_name).copied() {
+                let parsed = &parsed_docs[parsed_idx];
+                if let Some(scope) = module_scopes.get(&parsed.module_name).cloned() {
+                    let previous_scope = resolver.current_scope.clone();
+                    resolver.current_scope = scope;
+                    resolver.base_path = parsed
+                        .uri
+                        .to_file_path()
+                        .ok()
+                        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+                    resolver.resolve_source_file(&parsed.cst, &parsed.source);
+                    resolver.current_scope = previous_scope;
+                }
             }
         }
 
