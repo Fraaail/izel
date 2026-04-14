@@ -1942,7 +1942,7 @@ path = "src/main.iz"
 | Formatting | Whole-document and range formatting are available via `izel-fmt` |
 
 Current LSP language intelligence now layers resolver and type-checker analysis for richer hover/completion and cross-file navigation.
-Further increments can deepen precision for module graph semantics and non-open workspace synchronization.
+Module graph precision is now DefId-driven (resolver identity first, name fallback second), and non-open workspace synchronization is wired through workspace-folder and watched-file change handlers.
 
 ### `izel-fmt` — Formatter
 

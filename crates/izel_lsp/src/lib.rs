@@ -23,6 +23,7 @@ enum DeclKind {
 struct SymbolOccurrence {
     name: String,
     span: izel_span::Span,
+    resolved_def: Option<izel_resolve::DefId>,
     range: Range,
     is_definition: bool,
     decl_kind: Option<DeclKind>,
@@ -257,8 +258,8 @@ impl Backend {
         &source[lo..hi]
     }
 
-    fn lex_tokens(source: &str) -> Vec<Token> {
-        let mut lexer = Lexer::new(source, izel_span::SourceId(1));
+    fn lex_tokens_with_source_id(source: &str, source_id: izel_span::SourceId) -> Vec<Token> {
+        let mut lexer = Lexer::new(source, source_id);
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token();
@@ -269,6 +270,10 @@ impl Backend {
             }
         }
         tokens
+    }
+
+    fn lex_tokens(source: &str) -> Vec<Token> {
+        Self::lex_tokens_with_source_id(source, izel_span::SourceId(1))
     }
 
     fn is_keyword_token(kind: TokenKind) -> bool {
@@ -543,8 +548,11 @@ impl Backend {
         }
     }
 
-    fn symbol_occurrences(source: &str) -> Vec<SymbolOccurrence> {
-        let tokens = Self::lex_tokens(source);
+    fn symbol_occurrences_with_source_id(
+        source: &str,
+        source_id: izel_span::SourceId,
+    ) -> Vec<SymbolOccurrence> {
+        let tokens = Self::lex_tokens_with_source_id(source, source_id);
         let mut out = Vec::new();
 
         for (idx, token) in tokens.iter().enumerate() {
@@ -566,6 +574,7 @@ impl Backend {
             out.push(SymbolOccurrence {
                 name,
                 span: token.span,
+                resolved_def: None,
                 range,
                 is_definition,
                 decl_kind,
@@ -586,54 +595,159 @@ impl Backend {
         uri.to_string()
     }
 
-    fn analyze_document(uri: Url, source: String) -> DocumentAnalysis {
-        let tokens = Self::lex_tokens(&source);
-        let mut parser = izel_parser::Parser::new(tokens, source.clone());
-        let cst = parser.parse_source_file();
-
-        let base_path = uri
+    fn module_name_for_uri(uri: &Url, fallback_index: usize) -> String {
+        let base = uri
             .to_file_path()
             .ok()
-            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-        let mut resolver = izel_resolve::Resolver::new(base_path);
-        resolver.resolve_source_file(&cst, &source);
+            .and_then(|path| {
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+            })
+            .unwrap_or_else(|| format!("module_{fallback_index}"));
 
-        let ast_lowerer = izel_ast_lower::Lowerer::new(&source);
-        let ast = ast_lowerer.lower_module(&cst);
-
-        let mut typeck = izel_typeck::TypeChecker::with_builtins();
-        typeck.span_to_def = resolver.def_ids.clone();
-
-        let mut ast_modules = std::collections::HashMap::new();
-        let loaded_csts = resolver.loaded_csts.read().unwrap();
-        for (name, (loaded_cst, loaded_source)) in loaded_csts.iter() {
-            let mod_ast_lowerer = izel_ast_lower::Lowerer::new(loaded_source);
-            let mod_ast = mod_ast_lowerer.lower_module(loaded_cst);
-            ast_modules.insert(name.clone(), mod_ast);
-        }
-        drop(loaded_csts);
-
-        typeck.check_project(&ast, ast_modules);
-
-        let mut symbols = Self::symbol_occurrences(&source);
-        let span_to_def = resolver.def_ids.read().unwrap();
-        for symbol in &mut symbols {
-            if let Some(def_id) = span_to_def.get(&symbol.span) {
-                if let Some(ty) = typeck.def_types.get(def_id) {
-                    symbol.type_info = Some(Self::format_type(ty));
+        let sanitized = base
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '_' {
+                    ch
+                } else {
+                    '_'
                 }
+            })
+            .collect::<String>();
+
+        if sanitized.is_empty() {
+            format!("module_{fallback_index}")
+        } else {
+            sanitized
+        }
+    }
+
+    fn analyze_documents(documents: Vec<(Url, String)>) -> Vec<DocumentAnalysis> {
+        if documents.is_empty() {
+            return Vec::new();
+        }
+
+        struct ParsedDocument {
+            uri: Url,
+            source: String,
+            source_id: izel_span::SourceId,
+            module_name: String,
+            cst: izel_parser::cst::SyntaxNode,
+        }
+
+        let mut resolver = izel_resolve::Resolver::new(None);
+        resolver.next_source_id.store(
+            (documents.len() as u32).saturating_add(1000),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+
+        let mut parsed_docs = Vec::<ParsedDocument>::new();
+        let mut module_name_counts = HashMap::<String, usize>::new();
+        for (idx, (uri, source)) in documents.into_iter().enumerate() {
+            let source_id = izel_span::SourceId((idx as u32).saturating_add(1));
+            let base_module_name = Self::module_name_for_uri(&uri, idx);
+            let count = module_name_counts
+                .entry(base_module_name.clone())
+                .or_insert(0);
+            let module_name = if *count == 0 {
+                base_module_name
+            } else {
+                format!("{}_{}", base_module_name, count)
+            };
+            *count += 1;
+
+            let tokens = Self::lex_tokens_with_source_id(&source, source_id);
+            let mut parser = izel_parser::Parser::new(tokens, source.clone());
+            let cst = parser.parse_source_file();
+
+            parsed_docs.push(ParsedDocument {
+                uri,
+                source,
+                source_id,
+                module_name,
+                cst,
+            });
+        }
+
+        let mut module_scopes = HashMap::<String, Arc<izel_resolve::Scope>>::new();
+        for parsed in &parsed_docs {
+            module_scopes.insert(
+                parsed.module_name.clone(),
+                Arc::new(izel_resolve::Scope::new(None)),
+            );
+        }
+
+        let module_entries = module_scopes
+            .iter()
+            .map(|(name, scope)| (name.clone(), scope.clone()))
+            .collect::<Vec<_>>();
+        for (name, scope) in &module_entries {
+            let module_def_id = resolver.next_id();
+            resolver.root_scope.define_module(
+                name.clone(),
+                izel_span::Span::dummy(),
+                module_def_id,
+                scope.clone(),
+            );
+            for (_, target_scope) in &module_entries {
+                target_scope.define_module(
+                    name.clone(),
+                    izel_span::Span::dummy(),
+                    module_def_id,
+                    scope.clone(),
+                );
             }
         }
 
-        DocumentAnalysis { uri, symbols }
+        for parsed in &parsed_docs {
+            if let Some(scope) = module_scopes.get(&parsed.module_name).cloned() {
+                let previous_scope = resolver.current_scope.clone();
+                resolver.current_scope = scope;
+                resolver.base_path = parsed
+                    .uri
+                    .to_file_path()
+                    .ok()
+                    .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+                resolver.resolve_source_file(&parsed.cst, &parsed.source);
+                resolver.current_scope = previous_scope;
+            }
+        }
+
+        let mut typeck = izel_typeck::TypeChecker::with_builtins();
+        typeck.span_to_def = resolver.def_ids.clone();
+        for parsed in &parsed_docs {
+            let ast_lowerer = izel_ast_lower::Lowerer::new(&parsed.source);
+            let ast = ast_lowerer.lower_module(&parsed.cst);
+            typeck.check_ast(&ast);
+        }
+
+        let span_to_def = resolver.def_ids.read().unwrap();
+        parsed_docs
+            .into_iter()
+            .map(|parsed| {
+                let mut symbols =
+                    Self::symbol_occurrences_with_source_id(&parsed.source, parsed.source_id);
+                for symbol in &mut symbols {
+                    if let Some(def_id) = span_to_def.get(&symbol.span) {
+                        symbol.resolved_def = Some(*def_id);
+                        if let Some(ty) = typeck.def_types.get(def_id) {
+                            symbol.type_info = Some(Self::format_type(ty));
+                        }
+                    }
+                }
+                DocumentAnalysis {
+                    uri: parsed.uri,
+                    symbols,
+                }
+            })
+            .collect()
     }
 
     async fn collect_analyzed_documents(&self, active_uri: Option<&Url>) -> Vec<DocumentAnalysis> {
-        self.collect_all_documents(active_uri)
-            .await
-            .into_iter()
-            .map(|(uri, source)| Self::analyze_document(uri, source))
-            .collect()
+        let documents = self.collect_all_documents(active_uri).await;
+        Self::analyze_documents(documents)
     }
 
     fn symbol_at_position(
@@ -663,14 +777,31 @@ impl Backend {
 
     fn find_definitions(
         documents: &[DocumentAnalysis],
-        name: &str,
+        query: &SymbolOccurrence,
     ) -> Vec<(Url, SymbolOccurrence)> {
+        if let Some(query_def_id) = query.resolved_def {
+            let mut defs = Vec::new();
+            for document in documents {
+                for symbol in document
+                    .symbols
+                    .iter()
+                    .filter(|occ| occ.is_definition && occ.resolved_def == Some(query_def_id))
+                {
+                    defs.push((document.uri.clone(), symbol.clone()));
+                }
+            }
+
+            if !defs.is_empty() {
+                return defs;
+            }
+        }
+
         let mut defs = Vec::new();
         for document in documents {
             for symbol in document
                 .symbols
                 .iter()
-                .filter(|occ| occ.name == name && occ.is_definition)
+                .filter(|occ| occ.name == query.name && occ.is_definition)
             {
                 defs.push((document.uri.clone(), symbol.clone()));
             }
@@ -681,7 +812,7 @@ impl Backend {
         }
 
         for document in documents {
-            if let Some(symbol) = document.symbols.iter().find(|occ| occ.name == name) {
+            if let Some(symbol) = document.symbols.iter().find(|occ| occ.name == query.name) {
                 return vec![(document.uri.clone(), symbol.clone())];
             }
         }
@@ -691,15 +822,31 @@ impl Backend {
 
     fn find_references(
         documents: &[DocumentAnalysis],
-        name: &str,
+        query: &SymbolOccurrence,
         include_declaration: bool,
     ) -> Vec<(Url, SymbolOccurrence)> {
+        if let Some(query_def_id) = query.resolved_def {
+            let mut refs = Vec::new();
+            for document in documents {
+                for symbol in document.symbols.iter().filter(|occ| {
+                    occ.resolved_def == Some(query_def_id)
+                        && (include_declaration || !occ.is_definition)
+                }) {
+                    refs.push((document.uri.clone(), symbol.clone()));
+                }
+            }
+
+            if !refs.is_empty() {
+                return refs;
+            }
+        }
+
         let mut refs = Vec::new();
         for document in documents {
             for symbol in document
                 .symbols
                 .iter()
-                .filter(|occ| occ.name == name && (include_declaration || !occ.is_definition))
+                .filter(|occ| occ.name == query.name && (include_declaration || !occ.is_definition))
             {
                 refs.push((document.uri.clone(), symbol.clone()));
             }
@@ -1183,6 +1330,13 @@ impl LanguageServer for Backend {
                 ),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
                 ..ServerCapabilities::default()
             },
             ..Default::default()
@@ -1235,6 +1389,49 @@ impl LanguageServer for Backend {
         }
     }
 
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        let mut roots = self.workspace_roots.write().await;
+
+        let removed = params
+            .event
+            .removed
+            .iter()
+            .filter_map(|folder| folder.uri.to_file_path().ok())
+            .collect::<HashSet<_>>();
+        roots.retain(|root| !removed.contains(root));
+
+        for folder in &params.event.added {
+            if let Ok(path) = folder.uri.to_file_path() {
+                roots.push(path);
+            }
+        }
+
+        roots.sort();
+        roots.dedup();
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        for change in params.changes {
+            if change.uri.path().ends_with(".iz") {
+                match change.typ {
+                    FileChangeType::DELETED => {
+                        self.remove_document(&change.uri).await;
+                    }
+                    FileChangeType::CHANGED | FileChangeType::CREATED => {
+                        if let Ok(path) = change.uri.to_file_path() {
+                            if let Ok(source) = std::fs::read_to_string(path) {
+                                self.upsert_document(change.uri.clone(), source.clone())
+                                    .await;
+                                self.validate_document(change.uri, source).await;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
@@ -1248,7 +1445,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let definitions = Self::find_definitions(&documents, &symbol.name);
+        let definitions = Self::find_definitions(&documents, &symbol);
         let markdown = Self::build_hover_markdown(&symbol, &definitions);
 
         Ok(Some(Hover {
@@ -1276,7 +1473,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let locations = Self::find_definitions(&documents, &symbol.name)
+        let locations = Self::find_definitions(&documents, &symbol)
             .into_iter()
             .map(|(def_uri, occ)| Location {
                 uri: def_uri,
@@ -1305,7 +1502,7 @@ impl LanguageServer for Backend {
         };
 
         let locations =
-            Self::find_references(&documents, &symbol.name, params.context.include_declaration)
+            Self::find_references(&documents, &symbol, params.context.include_declaration)
                 .into_iter()
                 .map(|(ref_uri, occ)| Location {
                     uri: ref_uri,
@@ -1360,7 +1557,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let refs = Self::find_references(&documents, &symbol.name, true);
+        let refs = Self::find_references(&documents, &symbol, true);
 
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for (ref_uri, occ) in refs {
@@ -1954,6 +2151,139 @@ mod tests {
             .as_ref()
             .map(|d| d.contains("from"))
             .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn def_id_matching_prioritizes_correct_symbol_over_name_collision() {
+        let backend = test_backend();
+        let foo1_uri = test_uri_named("foo1");
+        let foo2_uri = test_uri_named("foo2");
+        let main_uri = test_uri_named("main");
+
+        let foo1_source = "forge helper() -> i32 { give 1 }";
+        let foo2_source = "forge helper() -> i32 { give 2 }";
+        let main_source = "draw foo1\nforge main() -> i32 { give helper() }";
+
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: foo1_uri.clone(),
+                    language_id: "izel".to_string(),
+                    version: 1,
+                    text: foo1_source.to_string(),
+                },
+            })
+            .await;
+
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: foo2_uri.clone(),
+                    language_id: "izel".to_string(),
+                    version: 1,
+                    text: foo2_source.to_string(),
+                },
+            })
+            .await;
+
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: main_uri.clone(),
+                    language_id: "izel".to_string(),
+                    version: 1,
+                    text: main_source.to_string(),
+                },
+            })
+            .await;
+
+        let call_offset = main_source
+            .rfind("helper()")
+            .expect("helper call should exist in main_source");
+        let call_position = Backend::byte_to_position(main_source, call_offset + 1);
+
+        let definition = backend
+            .goto_definition(GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: main_uri.clone(),
+                    },
+                    position: call_position,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            })
+            .await
+            .expect("definition should succeed")
+            .expect("definition should return locations");
+
+        let definition_locs = match definition {
+            GotoDefinitionResponse::Array(items) => items,
+            GotoDefinitionResponse::Scalar(item) => vec![item],
+            GotoDefinitionResponse::Link(items) => items
+                .into_iter()
+                .map(|item| Location {
+                    uri: item.target_uri,
+                    range: item.target_range,
+                })
+                .collect(),
+        };
+
+        assert!(definition_locs.iter().any(|loc| loc.uri == foo1_uri));
+        assert!(
+            !definition_locs.iter().any(|loc| loc.uri == foo2_uri),
+            "definition lookup should resolve imported helper via DefId rather than name collisions"
+        );
+    }
+
+    #[tokio::test]
+    async fn watched_files_and_workspace_folder_changes_update_state() {
+        let backend = test_backend();
+
+        let root_a = Url::parse("file:///tmp/workspace-a").expect("valid workspace root A");
+        let root_b = Url::parse("file:///tmp/workspace-b").expect("valid workspace root B");
+
+        backend
+            .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+                event: WorkspaceFoldersChangeEvent {
+                    added: vec![WorkspaceFolder {
+                        uri: root_a.clone(),
+                        name: "workspace-a".to_string(),
+                    }],
+                    removed: vec![],
+                },
+            })
+            .await;
+
+        backend
+            .did_change_workspace_folders(DidChangeWorkspaceFoldersParams {
+                event: WorkspaceFoldersChangeEvent {
+                    added: vec![WorkspaceFolder {
+                        uri: root_b,
+                        name: "workspace-b".to_string(),
+                    }],
+                    removed: vec![WorkspaceFolder {
+                        uri: root_a,
+                        name: "workspace-a".to_string(),
+                    }],
+                },
+            })
+            .await;
+
+        let roots = backend.workspace_roots.read().await.clone();
+        assert_eq!(roots.len(), 1);
+
+        let watched_uri = test_uri_named("watched");
+        backend
+            .did_change_watched_files(DidChangeWatchedFilesParams {
+                changes: vec![FileEvent {
+                    uri: watched_uri.clone(),
+                    typ: FileChangeType::DELETED,
+                }],
+            })
+            .await;
+
+        assert!(backend.get_document(&watched_uri).await.is_none());
     }
 
     #[test]
