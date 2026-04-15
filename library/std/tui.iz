@@ -1,0 +1,6 @@
+forge tui_line(ch: str, count: int)
+forge tui_separator()
+forge tui_title(title: str)
+forge tui_metric(label: str, value: int)
+forge tui_progress(label: str, current: int, goal: int)
+forge tui_alert(msg: str)

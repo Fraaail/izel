@@ -388,7 +388,52 @@ impl MirLowerer {
 
                 Rvalue::Use(Operand::Constant(Constant::Int(0)))
             }
-            _ => Rvalue::Use(Operand::Constant(Constant::Int(0))),
+            HirExpr::While { cond, body } => {
+                let cond_id = self.body.blocks.add_node(BasicBlock {
+                    instructions: Vec::new(),
+                    terminator: None,
+                });
+                let body_id = self.body.blocks.add_node(BasicBlock {
+                    instructions: Vec::new(),
+                    terminator: None,
+                });
+                let exit_id = self.body.blocks.add_node(BasicBlock {
+                    instructions: Vec::new(),
+                    terminator: None,
+                });
+
+                self.body
+                    .blocks
+                    .add_edge(self.current_block, cond_id, ControlFlow::Unconditional);
+                self.body.blocks[self.current_block].terminator = Some(Terminator::Goto(cond_id));
+
+                self.current_block = cond_id;
+                let cond_rv = self.lower_expr(cond);
+                let cond_op = self.rvalue_to_operand(cond_rv);
+                self.body
+                    .blocks
+                    .add_edge(cond_id, body_id, ControlFlow::Conditional(true));
+                self.body
+                    .blocks
+                    .add_edge(cond_id, exit_id, ControlFlow::Conditional(false));
+                self.body.blocks[cond_id].terminator =
+                    Some(Terminator::SwitchInt(cond_op, vec![(1, body_id)], exit_id));
+
+                self.current_block = body_id;
+                self.lower_block(body);
+                if self.body.blocks[self.current_block].terminator.is_none() {
+                    self.body.blocks.add_edge(
+                        self.current_block,
+                        cond_id,
+                        ControlFlow::Unconditional,
+                    );
+                    self.body.blocks[self.current_block].terminator =
+                        Some(Terminator::Goto(cond_id));
+                }
+
+                self.current_block = exit_id;
+                Rvalue::Use(Operand::Constant(Constant::Bool(false)))
+            }
         }
     }
 

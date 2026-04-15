@@ -1,0 +1,65 @@
+draw std/io
+
+forge tui_line(ch: str, count: int) {
+    ~i = 0
+    while i < count {
+        print(ch)
+        i = i + 1
+    }
+    println_newline()
+}
+
+forge tui_separator() {
+    tui_line("=", 52)
+}
+
+forge tui_title(title: str) {
+    tui_separator()
+    println(title)
+    tui_separator()
+}
+
+forge tui_metric(label: str, value: int) {
+    print(label)
+    print(": ")
+    println_int(value)
+}
+
+forge tui_progress(label: str, current: int, goal: int) {
+    given goal <= 0 {
+        print(label)
+        println(": unavailable")
+    }
+
+    given goal > 0 {
+        ~percent = current * 100 / goal
+        given percent < 0 {
+            percent = 0
+        }
+        given percent > 100 {
+            percent = 100
+        }
+
+        print(label)
+        print(": ")
+        println_int(percent)
+
+        print("[")
+        ~filled = percent / 5
+        ~i = 0
+        while i < filled {
+            print("#")
+            i = i + 1
+        }
+        ~j = filled
+        while j < 20 {
+            print(".")
+            j = j + 1
+        }
+        println("]")
+    }
+}
+
+forge tui_alert(msg: str) {
+    eprintln(msg)
+}

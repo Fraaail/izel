@@ -72,6 +72,9 @@ impl Parser {
                 .map(|t| t.kind)
                 .unwrap_or(TokenKind::Eof);
             let prec = Precedence::from_kind(kind);
+            if self.condition_expr_depth > 0 && kind == TokenKind::OpenBrace {
+                break;
+            }
             if prec <= min_precedence || prec == Precedence::None {
                 break;
             }

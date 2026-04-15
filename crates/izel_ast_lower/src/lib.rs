@@ -1258,6 +1258,77 @@ impl<'a> Lowerer<'a> {
                     else_expr,
                 }
             }
+            NodeKind::LoopExpr => {
+                let mut body = None;
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        if n.kind == NodeKind::Block {
+                            body = Some(self.lower_block(n));
+                            break;
+                        }
+                    }
+                }
+                ast::Expr::Loop(body.unwrap_or(ast::Block {
+                    stmts: vec![],
+                    expr: None,
+                    span: node.span(),
+                }))
+            }
+            NodeKind::WhileExpr => {
+                let mut cond = None;
+                let mut body = None;
+
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        if n.kind == NodeKind::Block {
+                            body = Some(self.lower_block(n));
+                        } else if cond.is_none() {
+                            cond = Some(self.lower_expr(n));
+                        }
+                    }
+                }
+
+                ast::Expr::While {
+                    cond: Box::new(cond.unwrap_or(ast::Expr::Literal(ast::Literal::Nil))),
+                    body: body.unwrap_or(ast::Block {
+                        stmts: vec![],
+                        expr: None,
+                        span: node.span(),
+                    }),
+                }
+            }
+            NodeKind::EachExpr => {
+                let mut expr_nodes: Vec<&SyntaxNode> = Vec::new();
+                let mut body = None;
+
+                for child in &node.children {
+                    if let SyntaxElement::Node(n) = child {
+                        if n.kind == NodeKind::Block {
+                            body = Some(self.lower_block(n));
+                        } else {
+                            expr_nodes.push(n);
+                        }
+                    }
+                }
+
+                let var_expr = expr_nodes.first().map(|n| self.lower_expr(n));
+                let iter_expr = expr_nodes.get(1).map(|n| self.lower_expr(n));
+
+                let var = match var_expr {
+                    Some(ast::Expr::Ident(name, _)) => name,
+                    _ => "_each_item".to_string(),
+                };
+
+                ast::Expr::Each {
+                    var,
+                    iter: Box::new(iter_expr.unwrap_or(ast::Expr::Literal(ast::Literal::Nil))),
+                    body: body.unwrap_or(ast::Block {
+                        stmts: vec![],
+                        expr: None,
+                        span: node.span(),
+                    }),
+                }
+            }
             NodeKind::Block => ast::Expr::Block(self.lower_block(node)),
             NodeKind::RawExpr => {
                 let mut inner_node = None;

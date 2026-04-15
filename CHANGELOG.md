@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 - Added codegen regression tests for string escape decoding and `str_free` intrinsic coverage.
 - Added stderr-backed runtime intrinsic for string error printing (`io_eprint_str`) used by `eprintln`.
 - Added dedicated runtime IO integration snapshots for stdout/stderr stream separation in `izel_driver` tests.
+- Added `sample_applications/` with 100 numbered practical Izel app examples (`001`-`100`) and tutorial docs.
+- Added runtime `std/tui` and declaration `library/std/tui` surfaces for terminal dashboard-style application output.
 
 ### Changed
 - Replaced transitional dual round-trip test body generation with an empty, valid body.
@@ -25,4 +27,6 @@ All notable changes to this project will be documented in this file.
 - Runtime string literal lowering now decodes escape sequences (for example `\n`, `\t`, `\xNN`, `\u{...}`).
 - Expanded `library/std/io` declarations to better match executable runtime std io APIs.
 - MIR let-lowering now infers local types from initializer expressions when metadata is missing, preventing unsafe str temporary lowering.
+- Parser condition parsing now preserves full `given`/`while` boolean expressions while correctly respecting following blocks.
+- AST and MIR lowering now preserve control-flow nodes (`while`, `loop`, `each`) for ongoing runtime support expansion.
 

@@ -13,6 +13,7 @@ pub struct Parser {
     pub tokens: Vec<Token>,
     pub pos: usize,
     pub source: String,
+    pub condition_expr_depth: usize,
 }
 
 impl Parser {
@@ -21,6 +22,7 @@ impl Parser {
             tokens,
             pos: 0,
             source,
+            condition_expr_depth: 0,
         }
     }
 
@@ -976,7 +978,9 @@ impl Parser {
 
     pub fn parse_given_expr(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
         children.extend(self.eat_trivia());
-        children.push(SyntaxElement::Node(self.parse_expr(Precedence::Call)));
+        self.condition_expr_depth += 1;
+        children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+        self.condition_expr_depth -= 1;
         children.extend(self.eat_trivia());
         if self.current_kind() == TokenKind::OpenBrace {
             children.push(SyntaxElement::Node(self.parse_block()));
@@ -1045,7 +1049,9 @@ impl Parser {
 
     pub fn parse_while_expr(&mut self, mut children: Vec<SyntaxElement>) -> SyntaxNode {
         children.extend(self.eat_trivia());
-        children.push(SyntaxElement::Node(self.parse_expr(Precedence::Call)));
+        self.condition_expr_depth += 1;
+        children.push(SyntaxElement::Node(self.parse_expr(Precedence::None)));
+        self.condition_expr_depth -= 1;
         children.extend(self.eat_trivia());
         if self.current_kind() == TokenKind::OpenBrace {
             children.push(SyntaxElement::Node(self.parse_block()));

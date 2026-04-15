@@ -41,6 +41,7 @@ forge main() -> i32 {
 6. Zones: deterministic region-based memory management.
 7. Concurrency: thread and async surfaces.
 8. FFI: raw blocks, bridge declarations, and unsafe boundaries.
+9. Sample Applications: 100 practical examples and usage workflows.
 
 ## Reading Guidance
 

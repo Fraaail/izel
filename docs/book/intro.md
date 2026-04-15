@@ -15,3 +15,4 @@ Recommended reading order:
 7. `06-zones.md`
 8. `07-concurrency.md`
 9. `08-ffi.md`
+10. `09-sample-applications.md`

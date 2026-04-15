@@ -8,6 +8,7 @@ This repository contains the compiler, toolchain, standard library wards, langua
 
 - `crates/`: compiler and toolchain crates.
 - `examples/`: runnable Izel source examples.
+- `sample_applications/`: 001-100 practical app-style examples and tutorials.
 - `library/std/` and `std/`: standard library ward sources.
 - `tests/`: integration, compile-pass/fail, and feature-specific fixtures.
 - `docs/`: book chapters, reference/spec content, and project overviews.
@@ -51,6 +52,12 @@ Format an Izel source file:
 cargo run -p izel_driver -- fmt examples/hello.iz
 ```
 
+Compile-check a sample application (full frontend + lowering + LLVM IR path):
+
+```bash
+bash tools/ci/with_llvm_env.sh cargo run -p izel_driver -- sample_applications/001_budget_forecast_calculator.iz
+```
+
 Run the package manager entrypoint:
 
 ```bash
@@ -83,6 +90,23 @@ Feature-focused examples live under `examples/`, including:
 - `witness_valid.iz`
 - `zones_valid.iz`
 - `temporal_constraints.iz`
+
+## Sample Applications (001-100)
+
+Practical app-style examples now live under `sample_applications/`, with coverage for calculators,
+planning models, monitoring workloads, and terminal GUI-style dashboards (`std/tui`).
+
+Start here:
+- `sample_applications/README.md`
+- `sample_applications/TUTORIAL.md`
+
+Compile-check the whole suite:
+
+```bash
+for f in sample_applications/[0-9][0-9][0-9]_*.iz; do
+	bash tools/ci/with_llvm_env.sh cargo run -p izel_driver -- "$f" || break
+done
+```
 
 ## Browser Playground (WASM)
 

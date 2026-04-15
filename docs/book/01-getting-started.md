@@ -72,5 +72,30 @@ bash tools/ci/with_llvm_env.sh cargo test --workspace
 pre-commit run --all-files
 ```
 
+## Explore The 001-100 Sample Applications
+
+The repository includes a large practical suite under `sample_applications/`.
+
+Compile-check one application:
+
+```bash
+bash tools/ci/with_llvm_env.sh cargo run -p izel_driver -- sample_applications/001_budget_forecast_calculator.iz
+```
+
+Compile-check all applications:
+
+```bash
+for f in sample_applications/[0-9][0-9][0-9]_*.iz; do
+	bash tools/ci/with_llvm_env.sh cargo run -p izel_driver -- "$f" || break
+done
+```
+
+For tutorial sequencing and category guidance, read:
+- `sample_applications/README.md`
+- `sample_applications/TUTORIAL.md`
+
+Runtime support for loop-heavy execution is under active expansion; the compile-first workflow above
+is the most reliable way to validate the full suite today.
+
 Proceed to ownership next. Almost every advanced Izel feature depends on understanding moves and
 borrows first.
