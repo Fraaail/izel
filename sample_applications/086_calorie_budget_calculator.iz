@@ -1,0 +1,20 @@
+draw std/io
+
+shape App086Witness {
+}
+
+@proof forge app086_calorie_budget_calculator_prove_shape(n: i32) -> Witness<App086Witness> {
+    Witness::<App086Witness>::new()
+}
+
+forge app086_calorie_budget_calculator_verified_metric(n: i32, _w: Witness<App086Witness>) -> i32 {
+    give n - 3
+}
+
+forge main() -> int {
+    println("086: calorie budget calculator")
+    let w = app086_calorie_budget_calculator_prove_shape(328)
+    let m = app086_calorie_budget_calculator_verified_metric(328, w)
+    println_int(m)
+    give 0
+}

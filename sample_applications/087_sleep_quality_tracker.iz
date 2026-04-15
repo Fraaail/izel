@@ -1,0 +1,21 @@
+draw std/io
+
+forge app087_sleep_quality_tracker_zone_sum(base: int) -> int {
+    ~acc = 0
+    zone arena {
+        let alloc = zone::allocator()
+        ~i = 0
+        while i < 9 {
+            acc = acc + base + i
+            i = i + 1
+        }
+    }
+    give acc
+}
+
+forge main() -> int {
+    println("087: sleep quality tracker")
+    let total = app087_sleep_quality_tracker_zone_sum(214)
+    println_int(total)
+    give 0
+}

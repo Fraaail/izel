@@ -1,0 +1,13 @@
+draw std/io
+
+forge app058_strategy_resource_model_emit(_value: int) !io {
+}
+
+forge app058_strategy_resource_model_report(v1: int, v2: int) !io {
+    app058_strategy_resource_model_emit(v1)
+    app058_strategy_resource_model_emit(v2)
+}
+
+forge main() !io {
+    app058_strategy_resource_model_report(244, 156)
+}

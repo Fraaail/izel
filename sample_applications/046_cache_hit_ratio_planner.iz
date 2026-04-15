@@ -1,0 +1,13 @@
+draw std/io
+
+macro app046_cache_hit_ratio_planner_inflate(x) {
+    x + 3
+}
+
+forge main() -> int {
+    println("046: cache hit ratio planner")
+    let base = 208
+    let grown = app046_cache_hit_ratio_planner_inflate!(base)
+    println_int(grown)
+    give 0
+}

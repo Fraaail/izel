@@ -1,0 +1,13 @@
+draw std/io
+
+forge app092_pet_care_schedule_model_pick<T>(left: T, right: T, choose_left: bool) -> T {
+    given choose_left { give left }
+    give right
+}
+
+forge main() -> int {
+    println("092: pet care schedule model")
+    let picked = app092_pet_care_schedule_model_pick(346, 224, true)
+    println_int(picked)
+    give 0
+}

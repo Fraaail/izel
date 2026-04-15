@@ -1,0 +1,17 @@
+draw std/io
+
+@proof forge app085_fitness_training_load_prove(n: i32) -> Witness<i32> {
+    raw n
+}
+
+forge app085_fitness_training_load_safe_transform(v: i32, _proof: Witness<i32>) -> i32 {
+    give v + 2
+}
+
+forge main() -> int {
+    println("085: fitness training load")
+    let proof = app085_fitness_training_load_prove(325)
+    let out = app085_fitness_training_load_safe_transform(325, proof)
+    println_int(out)
+    give 0
+}

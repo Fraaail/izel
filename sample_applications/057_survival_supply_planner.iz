@@ -1,0 +1,15 @@
+draw std/io
+
+@requires(n >= 0)
+@ensures(result >= n)
+forge app057_survival_supply_planner_advance(n: int, step: int) -> int {
+    n + step
+}
+
+forge main() -> int {
+    println("057: survival supply planner")
+    let next = app057_survival_supply_planner_advance(241, 4)
+    println("next")
+    println_int(next)
+    give 0
+}

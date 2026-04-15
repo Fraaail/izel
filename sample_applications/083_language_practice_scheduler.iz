@@ -1,0 +1,13 @@
+draw std/io
+
+forge app083_language_practice_scheduler_emit(_value: int) !io {
+}
+
+forge app083_language_practice_scheduler_report(v1: int, v2: int) !io {
+    app083_language_practice_scheduler_emit(v1)
+    app083_language_practice_scheduler_emit(v2)
+}
+
+forge main() !io {
+    app083_language_practice_scheduler_report(319, 206)
+}

@@ -1,0 +1,17 @@
+draw std/io
+
+@proof forge app010_trip_budget_optimizer_prove(n: i32) -> Witness<i32> {
+    raw n
+}
+
+forge app010_trip_budget_optimizer_safe_transform(v: i32, _proof: Witness<i32>) -> i32 {
+    give v + 2
+}
+
+forge main() -> int {
+    println("010: trip budget optimizer")
+    let proof = app010_trip_budget_optimizer_prove(100)
+    let out = app010_trip_budget_optimizer_safe_transform(100, proof)
+    println_int(out)
+    give 0
+}

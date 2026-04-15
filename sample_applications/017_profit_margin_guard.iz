@@ -1,0 +1,13 @@
+draw std/io
+
+forge app017_profit_margin_guard_pick<T>(left: T, right: T, choose_left: bool) -> T {
+    given choose_left { give left }
+    give right
+}
+
+forge main() -> int {
+    println("017: profit margin guard")
+    let picked = app017_profit_margin_guard_pick(121, 74, false)
+    println_int(picked)
+    give 0
+}

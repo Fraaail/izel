@@ -1,0 +1,24 @@
+draw std/io
+
+forge app054_quest_reward_calculator_score(positive: int, negative: int) -> int {
+    let total = positive + negative
+    given total <= 0 {
+        give 0
+    }
+    let net = positive - negative
+    given net <= 0 {
+        give 0
+    }
+    give net - total
+}
+
+forge main() -> int {
+    println("054: quest reward calculator")
+    let score = app054_quest_reward_calculator_score(232, 15)
+    println("health score")
+    println_int(score)
+    given score < 55 {
+        eprintln("warning: unstable signal")
+    }
+    give 0
+}

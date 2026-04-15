@@ -1,0 +1,15 @@
+draw std/io
+
+@requires(n >= 0)
+@ensures(result >= n)
+forge app007_inventory_reorder_calculator_advance(n: int, step: int) -> int {
+    n + step
+}
+
+forge main() -> int {
+    println("007: inventory reorder calculator")
+    let next = app007_inventory_reorder_calculator_advance(91, 4)
+    println("next")
+    println_int(next)
+    give 0
+}

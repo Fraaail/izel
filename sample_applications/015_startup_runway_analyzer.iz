@@ -1,0 +1,20 @@
+draw std/io
+
+scroll App015Status {
+    Stable,
+    Watch,
+    Critical,
+}
+
+forge app015_startup_runway_analyzer_state(v: int) -> int {
+    given v <= 0 { give 0 }
+    given v == 1 { give 1 }
+    give 2
+}
+
+forge main() -> int {
+    println("015: startup runway analyzer")
+    let state = app015_startup_runway_analyzer_state(5)
+    println_int(state)
+    give 0
+}

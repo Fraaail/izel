@@ -1,0 +1,13 @@
+draw std/io
+
+macro app021_hotel_occupancy_forecaster_inflate(x) {
+    x + 3
+}
+
+forge main() -> int {
+    println("021: hotel occupancy forecaster")
+    let base = 133
+    let grown = app021_hotel_occupancy_forecaster_inflate!(base)
+    println_int(grown)
+    give 0
+}

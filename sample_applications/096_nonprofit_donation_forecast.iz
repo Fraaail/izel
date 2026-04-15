@@ -1,0 +1,13 @@
+draw std/io
+
+macro app096_nonprofit_donation_forecast_inflate(x) {
+    x + 3
+}
+
+forge main() -> int {
+    println("096: nonprofit donation forecast")
+    let base = 358
+    let grown = app096_nonprofit_donation_forecast_inflate!(base)
+    println_int(grown)
+    give 0
+}

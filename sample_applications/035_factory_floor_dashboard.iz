@@ -1,0 +1,17 @@
+draw std/io
+
+@proof forge app035_factory_floor_dashboard_prove(n: i32) -> Witness<i32> {
+    raw n
+}
+
+forge app035_factory_floor_dashboard_safe_transform(v: i32, _proof: Witness<i32>) -> i32 {
+    give v + 2
+}
+
+forge main() -> int {
+    println("035: factory floor dashboard")
+    let proof = app035_factory_floor_dashboard_prove(175)
+    let out = app035_factory_floor_dashboard_safe_transform(175, proof)
+    println_int(out)
+    give 0
+}

@@ -1,0 +1,15 @@
+draw std/io
+
+@requires(n >= 0)
+@ensures(result >= n)
+forge app032_water_usage_guard_advance(n: int, step: int) -> int {
+    n + step
+}
+
+forge main() -> int {
+    println("032: water usage guard")
+    let next = app032_water_usage_guard_advance(166, 4)
+    println("next")
+    println_int(next)
+    give 0
+}

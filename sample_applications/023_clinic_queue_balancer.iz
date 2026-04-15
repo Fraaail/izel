@@ -1,0 +1,16 @@
+draw std/io
+
+dual shape App023Codec<T> {
+    forge encode(&self, _v: &T) -> String {
+        "encoded"
+    }
+
+    forge decode(&self, _raw: &str) -> T {
+        raw 0
+    }
+}
+
+forge main() -> int {
+    println("023: clinic queue balancer")
+    give 0
+}

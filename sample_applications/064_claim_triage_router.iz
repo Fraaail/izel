@@ -1,0 +1,18 @@
+draw std/io
+
+shape App064Window {
+    start: int,
+    end: int,
+}
+
+forge app064_span(_w: App064Window) -> int {
+    give 42
+}
+
+forge main() -> int {
+    println("064: claim triage router")
+    let w = App064Window { start: 16, end: 262 }
+    let s = app064_span(w)
+    println_int(s)
+    give 0
+}

@@ -1,0 +1,29 @@
+draw std/io
+draw std/tui
+
+forge app080_last_mile_route_budget_throughput(base: int, gain: int, windows: int) -> int {
+    ~value = base
+    ~w = 0
+    while w < windows {
+        value = value + gain - w
+        w = w + 1
+    }
+    give value
+}
+
+forge main() -> int {
+    let throughput = app080_last_mile_route_budget_throughput(310, 2, 9 + 2)
+    let incidents = 23 + 2
+    let health = throughput - incidents
+
+    tui_title("080: last mile route budget")
+    tui_metric("throughput", throughput)
+    tui_metric("incidents", incidents)
+    tui_progress("service health", health, 100)
+
+    given incidents > 23 + 4 {
+        tui_alert("alert: incident pressure increased")
+    }
+
+    give 0
+}

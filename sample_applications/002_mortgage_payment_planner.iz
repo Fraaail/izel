@@ -1,0 +1,19 @@
+draw std/io
+
+forge app002_mortgage_payment_planner_break_even(price: int, fixed: int, unit_cost: int) -> int {
+    ~units = 0
+    ~profit = -fixed
+    while profit < 0 {
+        profit = profit + (price - unit_cost)
+        units = units + 1
+    }
+    give units
+}
+
+forge main() -> int {
+    println("002: mortgage payment planner")
+    let units = app002_mortgage_payment_planner_break_even(76, 44, 17)
+    println("break even units")
+    println_int(units)
+    give 0
+}

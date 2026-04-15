@@ -1,0 +1,20 @@
+draw std/io
+
+shape App011Witness {
+}
+
+@proof forge app011_sprint_capacity_planner_prove_shape(n: i32) -> Witness<App011Witness> {
+    Witness::<App011Witness>::new()
+}
+
+forge app011_sprint_capacity_planner_verified_metric(n: i32, _w: Witness<App011Witness>) -> i32 {
+    give n - 3
+}
+
+forge main() -> int {
+    println("011: sprint capacity planner")
+    let w = app011_sprint_capacity_planner_prove_shape(103)
+    let m = app011_sprint_capacity_planner_verified_metric(103, w)
+    println_int(m)
+    give 0
+}

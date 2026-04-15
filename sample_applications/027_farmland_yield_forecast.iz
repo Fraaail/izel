@@ -1,0 +1,19 @@
+draw std/io
+
+forge app027_farmland_yield_forecast_break_even(price: int, fixed: int, unit_cost: int) -> int {
+    ~units = 0
+    ~profit = -fixed
+    while profit < 0 {
+        profit = profit + (price - unit_cost)
+        units = units + 1
+    }
+    give units
+}
+
+forge main() -> int {
+    println("027: farmland yield forecast")
+    let units = app027_farmland_yield_forecast_break_even(151, 94, 15)
+    println("break even units")
+    println_int(units)
+    give 0
+}

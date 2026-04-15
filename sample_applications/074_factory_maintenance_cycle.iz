@@ -1,0 +1,20 @@
+draw std/io
+
+ward app074_factory_maintenance_cycle_core {
+    open shape Window {
+        open low: i32,
+        open high: i32,
+    }
+
+    pure forge span(_w: Window) -> i32 {
+        7
+    }
+}
+
+forge main() -> int {
+    println("074: factory maintenance cycle")
+    let w = app074_factory_maintenance_cycle_core::Window { low: 17, high: 292 }
+    let width = app074_factory_maintenance_cycle_core::span(w)
+    println_int(width)
+    give 0
+}

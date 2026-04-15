@@ -1,0 +1,20 @@
+draw std/io
+
+shape App036Witness {
+}
+
+@proof forge app036_service_desk_dashboard_prove_shape(n: i32) -> Witness<App036Witness> {
+    Witness::<App036Witness>::new()
+}
+
+forge app036_service_desk_dashboard_verified_metric(n: i32, _w: Witness<App036Witness>) -> i32 {
+    give n - 3
+}
+
+forge main() -> int {
+    println("036: service desk dashboard")
+    let w = app036_service_desk_dashboard_prove_shape(178)
+    let m = app036_service_desk_dashboard_verified_metric(178, w)
+    println_int(m)
+    give 0
+}

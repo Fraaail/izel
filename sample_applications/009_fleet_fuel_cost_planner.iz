@@ -1,0 +1,8 @@
+draw std/io
+
+forge app009_fleet_fuel_cost_planner_observe(_metric: int) !io {
+}
+
+forge main() !io {
+    app009_fleet_fuel_cost_planner_observe(97 - 15)
+}

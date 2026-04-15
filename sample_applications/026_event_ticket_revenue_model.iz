@@ -1,0 +1,23 @@
+draw std/io
+
+forge app026_event_ticket_revenue_model_forecast(seed: int, gain: int, cost: int, windows: int) -> int {
+    ~balance = seed
+    ~step = 0
+    while step < windows {
+        let wave = step
+        balance = balance + gain + wave - cost
+        step = step + 1
+    }
+    give balance
+}
+
+forge main() -> int {
+    println("026: event ticket revenue model")
+    let projected = app026_event_ticket_revenue_model_forecast(148, 92, 23, 11)
+    println("projected")
+    println_int(projected)
+    given projected < 91 {
+        eprintln("risk: projection is below target")
+    }
+    give 0
+}

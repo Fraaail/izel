@@ -1,0 +1,23 @@
+draw std/io
+
+forge app076_quality_defect_forecast_forecast(seed: int, gain: int, cost: int, windows: int) -> int {
+    ~balance = seed
+    ~step = 0
+    while step < windows {
+        let wave = step
+        balance = balance + gain + wave - cost
+        step = step + 1
+    }
+    give balance
+}
+
+forge main() -> int {
+    println("076: quality defect forecast")
+    let projected = app076_quality_defect_forecast_forecast(298, 192, 19, 12)
+    println("projected")
+    println_int(projected)
+    given projected < 91 {
+        eprintln("risk: projection is below target")
+    }
+    give 0
+}

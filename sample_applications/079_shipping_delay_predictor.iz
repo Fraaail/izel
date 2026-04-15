@@ -1,0 +1,24 @@
+draw std/io
+
+forge app079_shipping_delay_predictor_score(positive: int, negative: int) -> int {
+    let total = positive + negative
+    given total <= 0 {
+        give 0
+    }
+    let net = positive - negative
+    given net <= 0 {
+        give 0
+    }
+    give net - total
+}
+
+forge main() -> int {
+    println("079: shipping delay predictor")
+    let score = app079_shipping_delay_predictor_score(307, 22)
+    println("health score")
+    println_int(score)
+    given score < 55 {
+        eprintln("warning: unstable signal")
+    }
+    give 0
+}

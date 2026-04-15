@@ -1,0 +1,17 @@
+draw std/io
+
+@requires(lo <= hi)
+@ensures(result >= lo and result <= hi)
+forge app056_city_builder_economy_clamp(v: int, lo: int, hi: int) -> int {
+    given v < lo { give lo }
+    given v > hi { give hi }
+    give v
+}
+
+forge main() -> int {
+    println("056: city builder economy")
+    let bounded = app056_city_builder_economy_clamp(238, 17, 96)
+    println("bounded")
+    println_int(bounded)
+    give 0
+}

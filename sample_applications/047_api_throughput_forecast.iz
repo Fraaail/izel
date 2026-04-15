@@ -1,0 +1,15 @@
+draw std/io
+
+forge app047_api_throughput_forecast_sync() -> i32 {
+    17
+}
+
+flow forge app047_api_throughput_forecast_async() -> i32 {
+    211
+}
+
+flow forge main() {
+    let s = app047_api_throughput_forecast_sync()
+    let a = tide app047_api_throughput_forecast_async()
+    let total = s + a
+}

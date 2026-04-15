@@ -1,0 +1,23 @@
+draw std/io
+draw std/tui
+
+@requires(v >= 0)
+@ensures(result >= 0)
+forge app025_campus_shuttle_scheduler_risk(v: int, pressure: int) -> int {
+    let raw_score = v - pressure
+    given raw_score < 0 {
+        give 0
+    }
+    give raw_score
+}
+
+forge main() -> int {
+    let score = app025_campus_shuttle_scheduler_risk(145, 22)
+    tui_title("025: campus shuttle scheduler")
+    tui_metric("risk score", score)
+    tui_progress("stability", score, 100)
+    given score < 30 {
+        tui_alert("critical: immediate mitigation required")
+    }
+    give 0
+}

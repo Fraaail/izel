@@ -1,0 +1,16 @@
+draw std/io
+draw std/mem
+
+forge app038_hospital_ops_dashboard_simulate_buffer(bytes: int) -> int {
+    let p = alloc(bytes)
+    free(p)
+    give bytes - 8
+}
+
+forge main() -> int {
+    println("038: hospital ops dashboard")
+    let blocks = app038_hospital_ops_dashboard_simulate_buffer(184)
+    println("buffer blocks")
+    println_int(blocks)
+    give 0
+}

@@ -1,0 +1,16 @@
+draw std/io
+draw std/mem
+
+forge app063_insurance_premium_model_simulate_buffer(bytes: int) -> int {
+    let p = alloc(bytes)
+    free(p)
+    give bytes - 8
+}
+
+forge main() -> int {
+    println("063: insurance premium model")
+    let blocks = app063_insurance_premium_model_simulate_buffer(259)
+    println("buffer blocks")
+    println_int(blocks)
+    give 0
+}

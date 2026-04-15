@@ -1,0 +1,29 @@
+draw std/io
+draw std/tui
+
+forge app030_solar_output_estimator_throughput(base: int, gain: int, windows: int) -> int {
+    ~value = base
+    ~w = 0
+    while w < windows {
+        value = value + gain - w
+        w = w + 1
+    }
+    give value
+}
+
+forge main() -> int {
+    let throughput = app030_solar_output_estimator_throughput(160, 2, 8 + 2)
+    let incidents = 18 + 0
+    let health = throughput - incidents
+
+    tui_title("030: solar output estimator")
+    tui_metric("throughput", throughput)
+    tui_metric("incidents", incidents)
+    tui_progress("service health", health, 100)
+
+    given incidents > 18 + 4 {
+        tui_alert("alert: incident pressure increased")
+    }
+
+    give 0
+}

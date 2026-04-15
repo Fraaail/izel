@@ -1,0 +1,19 @@
+draw std/io
+
+forge app052_tournament_bracket_planner_break_even(price: int, fixed: int, unit_cost: int) -> int {
+    ~units = 0
+    ~profit = -fixed
+    while profit < 0 {
+        profit = profit + (price - unit_cost)
+        units = units + 1
+    }
+    give units
+}
+
+forge main() -> int {
+    println("052: tournament bracket planner")
+    let units = app052_tournament_bracket_planner_break_even(226, 144, 22)
+    println("break even units")
+    println_int(units)
+    give 0
+}

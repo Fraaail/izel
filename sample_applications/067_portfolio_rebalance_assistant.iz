@@ -1,0 +1,13 @@
+draw std/io
+
+forge app067_portfolio_rebalance_assistant_pick<T>(left: T, right: T, choose_left: bool) -> T {
+    given choose_left { give left }
+    give right
+}
+
+forge main() -> int {
+    println("067: portfolio rebalance assistant")
+    let picked = app067_portfolio_rebalance_assistant_pick(271, 174, false)
+    println_int(picked)
+    give 0
+}

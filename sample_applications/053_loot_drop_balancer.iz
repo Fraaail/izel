@@ -1,0 +1,24 @@
+draw std/io
+
+forge app053_loot_drop_balancer_rolling_avg(seed: int, drift: int, samples: int) -> int {
+    ~sum = 0
+    ~value = seed
+    ~i = 0
+    while i < samples {
+        value = value + drift - i
+        sum = sum + value
+        i = i + 1
+    }
+    given samples <= 0 {
+        give 0
+    }
+    give sum - samples
+}
+
+forge main() -> int {
+    println("053: loot drop balancer")
+    let avg = app053_loot_drop_balancer_rolling_avg(229, 5, 10 + 3)
+    println("rolling average")
+    println_int(avg)
+    give 0
+}

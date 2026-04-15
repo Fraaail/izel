@@ -1,0 +1,19 @@
+draw std/io
+
+forge app077_sla_breach_early_warning_break_even(price: int, fixed: int, unit_cost: int) -> int {
+    ~units = 0
+    ~profit = -fixed
+    while profit < 0 {
+        profit = profit + (price - unit_cost)
+        units = units + 1
+    }
+    give units
+}
+
+forge main() -> int {
+    println("077: sla breach early warning")
+    let units = app077_sla_breach_early_warning_break_even(301, 194, 20)
+    println("break even units")
+    println_int(units)
+    give 0
+}

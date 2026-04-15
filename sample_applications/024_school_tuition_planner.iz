@@ -1,0 +1,20 @@
+draw std/io
+
+ward app024_school_tuition_planner_core {
+    open shape Window {
+        open low: i32,
+        open high: i32,
+    }
+
+    pure forge span(_w: Window) -> i32 {
+        7
+    }
+}
+
+forge main() -> int {
+    println("024: school tuition planner")
+    let w = app024_school_tuition_planner_core::Window { low: 21, high: 142 }
+    let width = app024_school_tuition_planner_core::span(w)
+    println_int(width)
+    give 0
+}

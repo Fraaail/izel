@@ -1,0 +1,23 @@
+draw std/io
+
+weave App016Metric {
+    forge score(self) -> int
+}
+
+shape App016Node {
+    base: int,
+    penalty: int,
+}
+
+weave App016Metric for App016Node {
+    forge score(self) -> int {
+        give 1
+    }
+}
+
+forge main() -> int {
+    println("016: cashflow guardrail")
+    let n = App016Node { base: 118, penalty: 22 }
+    println_int(n.score())
+    give 0
+}

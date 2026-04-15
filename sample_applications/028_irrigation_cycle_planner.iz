@@ -1,0 +1,24 @@
+draw std/io
+
+forge app028_irrigation_cycle_planner_rolling_avg(seed: int, drift: int, samples: int) -> int {
+    ~sum = 0
+    ~value = seed
+    ~i = 0
+    while i < samples {
+        value = value + drift - i
+        sum = sum + value
+        i = i + 1
+    }
+    given samples <= 0 {
+        give 0
+    }
+    give sum - samples
+}
+
+forge main() -> int {
+    println("028: irrigation cycle planner")
+    let avg = app028_irrigation_cycle_planner_rolling_avg(154, 5, 6 + 3)
+    println("rolling average")
+    println_int(avg)
+    give 0
+}

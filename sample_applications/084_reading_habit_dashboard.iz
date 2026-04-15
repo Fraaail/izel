@@ -1,0 +1,8 @@
+draw std/io
+
+forge app084_reading_habit_dashboard_observe(_metric: int) !io {
+}
+
+forge main() !io {
+    app084_reading_habit_dashboard_observe(322 - 18)
+}

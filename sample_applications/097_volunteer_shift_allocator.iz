@@ -1,0 +1,15 @@
+draw std/io
+
+forge app097_volunteer_shift_allocator_sync() -> i32 {
+    22
+}
+
+flow forge app097_volunteer_shift_allocator_async() -> i32 {
+    361
+}
+
+flow forge main() {
+    let s = app097_volunteer_shift_allocator_sync()
+    let a = tide app097_volunteer_shift_allocator_async()
+    let total = s + a
+}

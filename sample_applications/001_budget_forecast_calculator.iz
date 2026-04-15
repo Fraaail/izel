@@ -1,0 +1,23 @@
+draw std/io
+
+forge app001_budget_forecast_calculator_forecast(seed: int, gain: int, cost: int, windows: int) -> int {
+    ~balance = seed
+    ~step = 0
+    while step < windows {
+        let wave = step
+        balance = balance + gain + wave - cost
+        step = step + 1
+    }
+    give balance
+}
+
+forge main() -> int {
+    println("001: budget forecast calculator")
+    let projected = app001_budget_forecast_calculator_forecast(73, 42, 16, 7)
+    println("projected")
+    println_int(projected)
+    given projected < 91 {
+        eprintln("risk: projection is below target")
+    }
+    give 0
+}

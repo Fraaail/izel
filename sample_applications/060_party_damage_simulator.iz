@@ -1,0 +1,17 @@
+draw std/io
+
+@proof forge app060_party_damage_simulator_prove(n: i32) -> Witness<i32> {
+    raw n
+}
+
+forge app060_party_damage_simulator_safe_transform(v: i32, _proof: Witness<i32>) -> i32 {
+    give v + 2
+}
+
+forge main() -> int {
+    println("060: party damage simulator")
+    let proof = app060_party_damage_simulator_prove(250)
+    let out = app060_party_damage_simulator_safe_transform(250, proof)
+    println_int(out)
+    give 0
+}

@@ -1,0 +1,23 @@
+draw std/io
+
+weave App091Metric {
+    forge score(self) -> int
+}
+
+shape App091Node {
+    base: int,
+    penalty: int,
+}
+
+weave App091Metric for App091Node {
+    forge score(self) -> int {
+        give 1
+    }
+}
+
+forge main() -> int {
+    println("091: home renovation planner")
+    let n = App091Node { base: 343, penalty: 16 }
+    println_int(n.score())
+    give 0
+}

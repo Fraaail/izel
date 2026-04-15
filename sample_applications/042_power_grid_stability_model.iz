@@ -1,0 +1,13 @@
+draw std/io
+
+forge app042_power_grid_stability_model_pick<T>(left: T, right: T, choose_left: bool) -> T {
+    given choose_left { give left }
+    give right
+}
+
+forge main() -> int {
+    println("042: power grid stability model")
+    let picked = app042_power_grid_stability_model_pick(196, 124, true)
+    println_int(picked)
+    give 0
+}

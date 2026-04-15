@@ -1,0 +1,20 @@
+draw std/io
+draw std::collections::*
+
+forge main() -> int {
+    println("070: forex position sizer")
+
+    let mut v = Vec::new()
+    v.push(22)
+    v.push(2)
+    let size = v.len()
+
+    let mut map = HashMap::new()
+    map.insert("risk", 280)
+
+    let mut tree = BTreeMap::new()
+    tree.insert(180, "node")
+
+    println_int(size)
+    give 0
+}

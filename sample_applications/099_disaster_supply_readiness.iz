@@ -1,0 +1,20 @@
+draw std/io
+
+ward app099_disaster_supply_readiness_core {
+    open shape Window {
+        open low: i32,
+        open high: i32,
+    }
+
+    pure forge span(_w: Window) -> i32 {
+        7
+    }
+}
+
+forge main() -> int {
+    println("099: disaster supply readiness")
+    let w = app099_disaster_supply_readiness_core::Window { low: 15, high: 367 }
+    let width = app099_disaster_supply_readiness_core::span(w)
+    println_int(width)
+    give 0
+}

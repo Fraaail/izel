@@ -1,0 +1,20 @@
+draw std/io
+
+shape App061Witness {
+}
+
+@proof forge app061_fraud_signal_monitor_prove_shape(n: i32) -> Witness<App061Witness> {
+    Witness::<App061Witness>::new()
+}
+
+forge app061_fraud_signal_monitor_verified_metric(n: i32, _w: Witness<App061Witness>) -> i32 {
+    give n - 3
+}
+
+forge main() -> int {
+    println("061: fraud signal monitor")
+    let w = app061_fraud_signal_monitor_prove_shape(253)
+    let m = app061_fraud_signal_monitor_verified_metric(253, w)
+    println_int(m)
+    give 0
+}

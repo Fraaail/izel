@@ -1,0 +1,18 @@
+draw std/io
+
+shape App014Window {
+    start: int,
+    end: int,
+}
+
+forge app014_span(_w: App014Window) -> int {
+    give 42
+}
+
+forge main() -> int {
+    println("014: marketing roi estimator")
+    let w = App014Window { start: 20, end: 112 }
+    let s = app014_span(w)
+    println_int(s)
+    give 0
+}

@@ -1,0 +1,15 @@
+draw std/io
+
+@requires(n >= 0)
+@ensures(result >= n)
+forge app082_exam_readiness_planner_advance(n: int, step: int) -> int {
+    n + step
+}
+
+forge main() -> int {
+    println("082: exam readiness planner")
+    let next = app082_exam_readiness_planner_advance(316, 4)
+    println("next")
+    println_int(next)
+    give 0
+}

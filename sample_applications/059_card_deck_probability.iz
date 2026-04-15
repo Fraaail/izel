@@ -1,0 +1,8 @@
+draw std/io
+
+forge app059_card_deck_probability_observe(_metric: int) !io {
+}
+
+forge main() !io {
+    app059_card_deck_probability_observe(247 - 20)
+}

@@ -1,0 +1,13 @@
+draw std/io
+
+forge app033_terminal_dashboard_gui_emit(_value: int) !io {
+}
+
+forge app033_terminal_dashboard_gui_report(v1: int, v2: int) !io {
+    app033_terminal_dashboard_gui_emit(v1)
+    app033_terminal_dashboard_gui_emit(v2)
+}
+
+forge main() !io {
+    app033_terminal_dashboard_gui_report(169, 106)
+}

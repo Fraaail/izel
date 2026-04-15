@@ -1,0 +1,30 @@
+draw std/io
+draw std::iter::*
+
+shape App068Counter {
+    ~n: i32
+    limit: i32
+}
+
+impl Iterator for App068Counter {
+    type Item = i32
+
+    forge next(&~self) -> ?i32 {
+        given self.n < self.limit {
+            let out = self.n
+            self.n = self.n + 1
+            give Some(out)
+        }
+        None
+    }
+}
+
+forge main() -> int {
+    println("068: retirement income projection")
+    let ~it = App068Counter { n: 0, limit: 11 }
+    let a = it.next()
+    let b = it.next()
+    let c = it.next()
+    println("iterator stepped")
+    give 0
+}

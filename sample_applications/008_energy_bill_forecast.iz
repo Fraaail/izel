@@ -1,0 +1,13 @@
+draw std/io
+
+forge app008_energy_bill_forecast_emit(_value: int) !io {
+}
+
+forge app008_energy_bill_forecast_report(v1: int, v2: int) !io {
+    app008_energy_bill_forecast_emit(v1)
+    app008_energy_bill_forecast_emit(v2)
+}
+
+forge main() !io {
+    app008_energy_bill_forecast_report(94, 56)
+}

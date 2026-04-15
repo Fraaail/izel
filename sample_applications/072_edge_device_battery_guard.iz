@@ -1,0 +1,15 @@
+draw std/io
+
+forge app072_edge_device_battery_guard_sync() -> i32 {
+    15
+}
+
+flow forge app072_edge_device_battery_guard_async() -> i32 {
+    286
+}
+
+flow forge main() {
+    let s = app072_edge_device_battery_guard_sync()
+    let a = tide app072_edge_device_battery_guard_async()
+    let total = s + a
+}

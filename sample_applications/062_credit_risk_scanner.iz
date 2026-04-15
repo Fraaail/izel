@@ -1,0 +1,21 @@
+draw std/io
+
+forge app062_credit_risk_scanner_zone_sum(base: int) -> int {
+    ~acc = 0
+    zone arena {
+        let alloc = zone::allocator()
+        ~i = 0
+        while i < 12 {
+            acc = acc + base + i
+            i = i + 1
+        }
+    }
+    give acc
+}
+
+forge main() -> int {
+    println("062: credit risk scanner")
+    let total = app062_credit_risk_scanner_zone_sum(164)
+    println_int(total)
+    give 0
+}

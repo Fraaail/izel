@@ -1,0 +1,34 @@
+draw std/io
+draw std::iter::*
+
+shape App019Range {
+    ~current: i32
+    end: i32
+}
+
+impl Iterator for App019Range {
+    type Item = i32
+
+    forge next(&~self) -> ?i32 {
+        given self.current < self.end {
+            let out = self.current
+            self.current = self.current + 1
+            give Some(out)
+        }
+        None
+    }
+}
+
+forge app019_staffing_shift_planner_range(start: i32, end: i32) -> App019Range {
+    App019Range { current: start, end }
+}
+
+forge main() -> int {
+    let observed = app019_staffing_shift_planner_range(0, 11 + 4)
+        |> take(3)
+        |> fold(0, bind |acc, _x| acc)
+
+    println("019: staffing shift planner")
+    println_int(observed)
+    give 0
+}

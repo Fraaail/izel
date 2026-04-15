@@ -1,0 +1,15 @@
+draw std/io
+
+forge app022_restaurant_demand_planner_sync() -> i32 {
+    19
+}
+
+flow forge app022_restaurant_demand_planner_async() -> i32 {
+    136
+}
+
+flow forge main() {
+    let s = app022_restaurant_demand_planner_sync()
+    let a = tide app022_restaurant_demand_planner_async()
+    let total = s + a
+}

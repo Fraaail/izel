@@ -1,0 +1,23 @@
+draw std/io
+
+forge app051_game_scoreboard_engine_forecast(seed: int, gain: int, cost: int, windows: int) -> int {
+    ~balance = seed
+    ~step = 0
+    while step < windows {
+        let wave = step
+        balance = balance + gain + wave - cost
+        step = step + 1
+    }
+    give balance
+}
+
+forge main() -> int {
+    println("051: game scoreboard engine")
+    let projected = app051_game_scoreboard_engine_forecast(223, 142, 21, 8)
+    println("projected")
+    println_int(projected)
+    given projected < 91 {
+        eprintln("risk: projection is below target")
+    }
+    give 0
+}

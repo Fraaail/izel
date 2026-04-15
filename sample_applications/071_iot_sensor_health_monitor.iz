@@ -1,0 +1,13 @@
+draw std/io
+
+macro app071_iot_sensor_health_monitor_inflate(x) {
+    x + 3
+}
+
+forge main() -> int {
+    println("071: iot sensor health monitor")
+    let base = 283
+    let grown = app071_iot_sensor_health_monitor_inflate!(base)
+    println_int(grown)
+    give 0
+}

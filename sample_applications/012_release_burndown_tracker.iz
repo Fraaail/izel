@@ -1,0 +1,21 @@
+draw std/io
+
+forge app012_release_burndown_tracker_zone_sum(base: int) -> int {
+    ~acc = 0
+    zone arena {
+        let alloc = zone::allocator()
+        ~i = 0
+        while i < 11 {
+            acc = acc + base + i
+            i = i + 1
+        }
+    }
+    give acc
+}
+
+forge main() -> int {
+    println("012: release burndown tracker")
+    let total = app012_release_burndown_tracker_zone_sum(64)
+    println_int(total)
+    give 0
+}

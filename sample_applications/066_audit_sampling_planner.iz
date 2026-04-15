@@ -1,0 +1,23 @@
+draw std/io
+
+weave App066Metric {
+    forge score(self) -> int
+}
+
+shape App066Node {
+    base: int,
+    penalty: int,
+}
+
+weave App066Metric for App066Node {
+    forge score(self) -> int {
+        give 1
+    }
+}
+
+forge main() -> int {
+    println("066: audit sampling planner")
+    let n = App066Node { base: 268, penalty: 18 }
+    println_int(n.score())
+    give 0
+}

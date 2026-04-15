@@ -1,0 +1,23 @@
+draw std/io
+
+weave App041Metric {
+    forge score(self) -> int
+}
+
+shape App041Node {
+    base: int,
+    penalty: int,
+}
+
+weave App041Metric for App041Node {
+    forge score(self) -> int {
+        give 1
+    }
+}
+
+forge main() -> int {
+    println("041: carbon emission tracker")
+    let n = App041Node { base: 193, penalty: 20 }
+    println_int(n.score())
+    give 0
+}

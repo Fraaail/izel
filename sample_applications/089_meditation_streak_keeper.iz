@@ -1,0 +1,18 @@
+draw std/io
+
+shape App089Window {
+    start: int,
+    end: int,
+}
+
+forge app089_span(_w: App089Window) -> int {
+    give 42
+}
+
+forge main() -> int {
+    println("089: meditation streak keeper")
+    let w = App089Window { start: 23, end: 337 }
+    let s = app089_span(w)
+    println_int(s)
+    give 0
+}

@@ -1,0 +1,21 @@
+draw std/io
+
+forge app037_airport_ops_dashboard_zone_sum(base: int) -> int {
+    ~acc = 0
+    zone arena {
+        let alloc = zone::allocator()
+        ~i = 0
+        while i < 8 {
+            acc = acc + base + i
+            i = i + 1
+        }
+    }
+    give acc
+}
+
+forge main() -> int {
+    println("037: airport ops dashboard")
+    let total = app037_airport_ops_dashboard_zone_sum(114)
+    println_int(total)
+    give 0
+}
