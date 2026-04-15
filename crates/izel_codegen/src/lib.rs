@@ -598,6 +598,39 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 self.builder.build_call(printf, &printf_args, "printf")?;
                 self.builder.build_return(None)?;
             }
+            "io_eprint_str" => {
+                let val = function.get_nth_param(0).unwrap().into_pointer_value();
+                let write = self.get_write()?;
+                let strlen = self.get_strlen()?;
+
+                let len_call = self.builder.build_call(strlen, &[val.into()], "strlen")?;
+                let len = len_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("strlen did not return a length"))?
+                    .into_int_value();
+
+                let stderr_fd = self.context.i32_type().const_int(2, false);
+                self.builder.build_call(
+                    write,
+                    &[stderr_fd.into(), val.into(), len.into()],
+                    "write_stderr",
+                )?;
+
+                let newline = self.builder.build_global_string_ptr("\n", "stderr_nl")?;
+                let one = self.context.i64_type().const_int(1, false);
+                self.builder.build_call(
+                    write,
+                    &[
+                        stderr_fd.into(),
+                        newline.as_pointer_value().into(),
+                        one.into(),
+                    ],
+                    "write_stderr_nl",
+                )?;
+
+                self.builder.build_return(None)?;
+            }
             "io_print_newline" => {
                 let printf = self.get_printf()?;
                 let format_str = self.builder.build_global_string_ptr("\n", "format_nl")?;
@@ -708,6 +741,33 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         let size_type = self.context.i64_type(); // Runtime ABI uses 64-bit size_t.
         let fn_type = ptr_type.fn_type(&[size_type.into()], false);
         Ok(self.module.add_function("malloc", fn_type, None))
+    }
+
+    fn get_strlen(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("strlen") {
+            return Ok(f);
+        }
+        let size_type = self.context.i64_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = size_type.fn_type(&[ptr_type.into()], false);
+        Ok(self.module.add_function("strlen", fn_type, None))
+    }
+
+    fn get_write(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("write") {
+            return Ok(f);
+        }
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into(), i64_type.into()], false);
+        Ok(self.module.add_function("write", fn_type, None))
     }
 
     fn get_snprintf(&self) -> Result<FunctionValue<'ctx>> {
@@ -1114,6 +1174,13 @@ mod tests {
                 Type::Prim(PrimType::Void),
             ))),
             HirItem::Forge(Box::new(intrinsic_forge(
+                117,
+                "eprint_str",
+                "io_eprint_str",
+                vec![param(118, "msg", Type::Prim(PrimType::Str))],
+                Type::Prim(PrimType::Void),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
                 113,
                 "i32_to_str",
                 "i32_to_str",
@@ -1170,9 +1237,12 @@ mod tests {
         assert!(ir.contains("define void @_iz_print_int(i32 %0)"));
         assert!(ir.contains("define void @_iz_print_nl()"));
         assert!(ir.contains("define void @_iz_print_str(ptr %0)"));
+        assert!(ir.contains("define void @_iz_eprint_str(ptr %0)"));
         assert!(ir.contains("define ptr @_iz_i32_to_str(i32 %0)"));
         assert!(ir.contains("define void @_iz_free_str(ptr %0)"));
         assert!(ir.contains("declare i32 @printf(ptr, ...)"));
+        assert!(ir.contains("declare i64 @strlen(ptr)"));
+        assert!(ir.contains("declare i64 @write(i32, ptr, i64)"));
         assert!(ir.contains("declare i32 @snprintf(ptr, i64, ptr, ...)"));
         assert!(ir.contains("declare ptr @malloc(i64)"));
         assert!(ir.contains("declare void @free(ptr)"));
@@ -1199,6 +1269,20 @@ mod tests {
         assert_eq!(
             snprintf1.as_global_value().as_pointer_value(),
             snprintf2.as_global_value().as_pointer_value()
+        );
+
+        let strlen1 = codegen.get_strlen()?;
+        let strlen2 = codegen.get_strlen()?;
+        assert_eq!(
+            strlen1.as_global_value().as_pointer_value(),
+            strlen2.as_global_value().as_pointer_value()
+        );
+
+        let write1 = codegen.get_write()?;
+        let write2 = codegen.get_write()?;
+        assert_eq!(
+            write1.as_global_value().as_pointer_value(),
+            write2.as_global_value().as_pointer_value()
         );
 
         let free1 = codegen.get_free()?;
@@ -1663,6 +1747,13 @@ mod tests {
             vec![param(908, "msg", Type::Prim(PrimType::Str))],
             Type::Prim(PrimType::Void),
         )));
+        let io_eprint_str = HirItem::Forge(Box::new(intrinsic_forge(
+            918,
+            "eprint_str",
+            "io_eprint_str",
+            vec![param(919, "msg", Type::Prim(PrimType::Str))],
+            Type::Prim(PrimType::Void),
+        )));
         let i32_to_str = HirItem::Forge(Box::new(intrinsic_forge(
             909,
             "i32_to_str",
@@ -1695,6 +1786,7 @@ mod tests {
             io_print_int,
             io_print_newline,
             io_print_str,
+            io_eprint_str,
             i32_to_str,
             str_free,
             simd_sum,
@@ -1707,6 +1799,8 @@ mod tests {
         let ir = codegen.emit_llvm_ir();
         assert!(ir.contains("@llvm.abs.i32"));
         assert!(ir.contains("@printf"));
+        assert!(ir.contains("@write"));
+        assert!(ir.contains("@strlen"));
         assert!(ir.contains("@snprintf"));
         assert!(ir.contains("@llvm.vector.reduce.add.v4i32"));
         Ok(())

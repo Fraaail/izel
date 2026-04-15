@@ -104,6 +104,7 @@ This runtime path supports string literals, so programs like `println("Hello fro
 
 Runtime note: `to_str(int)` returns an owned runtime string buffer.
 Use `free_str(...)` after use (the std `println_int(...)` helper already handles this cleanup).
+`eprintln(...)` is stderr-backed in the runtime path, so stdout and stderr can be captured separately.
 
 For frontend-only static serving (no runtime execution), use:
 

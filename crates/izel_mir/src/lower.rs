@@ -123,7 +123,12 @@ impl MirLowerer {
             } => {
                 if let Some(val_expr) = init {
                     let rvalue = self.lower_expr(val_expr);
-                    let local = self.new_local(name.clone(), ty.clone());
+                    let local_ty = if matches!(ty, Type::Error) {
+                        self.infer_expr_type(val_expr)
+                    } else {
+                        ty.clone()
+                    };
+                    let local = self.new_local(name.clone(), local_ty);
                     self.body.blocks[self.current_block]
                         .instructions
                         .push(Instruction::Assign(local, rvalue));
@@ -140,6 +145,26 @@ impl MirLowerer {
             HirStmt::Expr(expr) => {
                 self.lower_expr(expr);
             }
+        }
+    }
+
+    fn infer_expr_type(&self, expr: &HirExpr) -> Type {
+        match expr {
+            HirExpr::Literal(lit) => match lit {
+                izel_parser::ast::Literal::Int(_) => Type::Prim(PrimType::I32),
+                izel_parser::ast::Literal::Float(_) => Type::Prim(PrimType::F64),
+                izel_parser::ast::Literal::Bool(_) => Type::Prim(PrimType::Bool),
+                izel_parser::ast::Literal::Str(_) => Type::Prim(PrimType::Str),
+                izel_parser::ast::Literal::Nil => Type::Prim(PrimType::Void),
+            },
+            HirExpr::Ident(_, _, ty, _) => ty.clone(),
+            HirExpr::Binary(_, _, _, ty) => ty.clone(),
+            HirExpr::Unary(_, _, ty) => ty.clone(),
+            HirExpr::Call(_, _, _, ret_ty) => ret_ty.clone(),
+            HirExpr::Given { ty, .. } => ty.clone(),
+            HirExpr::Zone { ty, .. } => ty.clone(),
+            HirExpr::Return(_) => Type::Prim(PrimType::Void),
+            _ => Type::Error,
         }
     }
 
@@ -160,12 +185,10 @@ impl MirLowerer {
                 Rvalue::Use(Operand::Copy(local))
             }
             HirExpr::Zone { name, body, .. } => {
-                println!("  Adding ZoneEnter to {:?}: {}", self.current_block, name);
                 self.body.blocks[self.current_block]
                     .instructions
                     .push(Instruction::ZoneEnter(name.clone()));
                 let rv = self.lower_block(body);
-                println!("  Adding ZoneExit to {:?}: {}", self.current_block, name);
                 self.body.blocks[self.current_block]
                     .instructions
                     .push(Instruction::ZoneExit(name.clone()));
@@ -443,7 +466,58 @@ mod tests {
             span: Span::dummy(),
         };
         let mut lowerer = MirLowerer::new();
-        let _mir = lowerer.lower_forge(&forge);
+        let mir = lowerer.lower_forge(&forge);
+        let x_local = mir
+            .locals
+            .iter()
+            .find(|l| l.name == "x")
+            .expect("x local should be created");
+        assert_eq!(x_local.ty, Type::Prim(PrimType::I32));
+    }
+
+    #[test]
+    fn test_let_fallback_type_infers_str_from_call_return_type() {
+        let forge = HirForge {
+            name: "main".into(),
+            name_span: Span::dummy(),
+            def_id: DefId(0),
+            params: vec![],
+            ret_type: Type::Error,
+            attributes: vec![],
+            body: Some(HirBlock {
+                stmts: vec![HirStmt::Let {
+                    name: "msg".into(),
+                    def_id: DefId(11),
+                    ty: Type::Error,
+                    init: Some(HirExpr::Call(
+                        Box::new(HirExpr::Ident(
+                            "to_str".to_string(),
+                            DefId(12),
+                            Type::Error,
+                            Span::dummy(),
+                        )),
+                        vec![HirExpr::Literal(izel_parser::ast::Literal::Int(7))],
+                        vec![],
+                        Type::Prim(PrimType::Str),
+                    )),
+                    span: Span::dummy(),
+                }],
+                expr: None,
+                span: Span::dummy(),
+            }),
+            requires: vec![],
+            ensures: vec![],
+            span: Span::dummy(),
+        };
+
+        let mut lowerer = MirLowerer::new();
+        let mir = lowerer.lower_forge(&forge);
+        let msg_local = mir
+            .locals
+            .iter()
+            .find(|l| l.name == "msg")
+            .expect("msg local should be created");
+        assert_eq!(msg_local.ty, Type::Prim(PrimType::Str));
     }
 
     #[test]

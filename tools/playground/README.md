@@ -33,6 +33,7 @@ The Run action (or Cmd/Ctrl+Enter) performs two stages:
 
 The runtime path supports string literals, so `println("hello")` style examples execute end-to-end.
 Escape sequences in string literals are normalized during codegen (for example `\n`, `\t`, `\x41`, `\u{1F600}`).
+`eprintln("...")` output is emitted on stderr and shown in the runtime stderr section.
 
 If you want frontend-only behavior, use:
 

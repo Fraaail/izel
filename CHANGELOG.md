@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 - Added runtime intrinsics for string printing (`io_print_str`) and integer to string conversion (`i32_to_str`).
 - Added runtime string ownership cleanup intrinsic (`str_free`) and std helper wiring (`free_str`).
 - Added codegen regression tests for string escape decoding and `str_free` intrinsic coverage.
+- Added stderr-backed runtime intrinsic for string error printing (`io_eprint_str`) used by `eprintln`.
+- Added dedicated runtime IO integration snapshots for stdout/stderr stream separation in `izel_driver` tests.
 
 ### Changed
 - Replaced transitional dual round-trip test body generation with an empty, valid body.
@@ -22,4 +24,5 @@ All notable changes to this project will be documented in this file.
 - Playground runtime/docs now reflect end-to-end support for string literal `println` execution.
 - Runtime string literal lowering now decodes escape sequences (for example `\n`, `\t`, `\xNN`, `\u{...}`).
 - Expanded `library/std/io` declarations to better match executable runtime std io APIs.
+- MIR let-lowering now infers local types from initializer expressions when metadata is missing, preventing unsafe str temporary lowering.
 

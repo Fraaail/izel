@@ -28,7 +28,5 @@ forge println_int(val: int) {
     println_owned(to_str(val))
 }
 
-forge eprintln(msg: str) {
-    // Runtime currently routes both streams through host stdout.
-    println(msg)
-}
+@intrinsic("io_eprint_str")
+forge eprintln(msg: str)
