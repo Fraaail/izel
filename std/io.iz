@@ -39,3 +39,21 @@ forge read_file(path: str) -> str
 
 @intrinsic("io_write_file")
 forge write_file(path: str, content: str) -> int
+
+@intrinsic("io_append_file")
+forge append_file(path: str, content: str) -> int
+
+@intrinsic("io_remove_file")
+forge remove_file(path: str) -> int
+
+@intrinsic("io_file_exists")
+forge file_exists(path: str) -> int
+
+@intrinsic("io_list_dir")
+forge list_dir(path: str) -> str
+
+@intrinsic("io_read_stdin_int")
+forge read_stdin_int() -> int
+
+@intrinsic("io_read_stdin_float")
+forge read_stdin_float() -> f64

@@ -2,12 +2,21 @@ draw std/io
 
 forge main() -> int {
     println("083: language practice scheduler")
-    println("input prompt: type lesson tag and press enter")
+    println("input prompt 1: type lesson tag and press enter")
 
     let line = read_stdin()
     println("echo")
     println(line)
     free_str(line)
+
+    println("input prompt 2: type sessions count and press enter")
+    let sessions = read_stdin_int()
+    println("sessions")
+    println_int(sessions)
+
+    println("input prompt 3: type focus score and press enter")
+    let focus = read_stdin_float()
+    println("focus score captured")
 
     give 0
 }

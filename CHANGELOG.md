@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 - Added runtime `std/tui` and declaration `library/std/tui` surfaces for terminal dashboard-style application output.
 - Added runtime `std/io` intrinsics for stdin and files: `io_read_stdin`, `io_read_file`, `io_write_file`.
 - Added runtime IO integration coverage for file write/read roundtrip behavior in `izel_driver` tests.
+- Added runtime `std/io` file utility intrinsics: `io_append_file`, `io_remove_file`, `io_file_exists`, and `io_list_dir`.
+- Added runtime `std/io` numeric stdin parsing intrinsics: `io_read_stdin_int` and `io_read_stdin_float`.
+- Added runtime IO integration coverage for append/exists/remove/listing and numeric stdin parsing paths.
 
 ### Changed
 - Replaced transitional dual round-trip test body generation with an empty, valid body.
@@ -29,6 +32,7 @@ All notable changes to this project will be documented in this file.
 - Runtime string literal lowering now decodes escape sequences (for example `\n`, `\t`, `\xNN`, `\u{...}`).
 - Expanded `library/std/io` declarations to better match executable runtime std io APIs.
 - Expanded executable/declaration std IO surfaces with `read_stdin()`, `read_file(path)`, and `write_file(path, content)`.
+- Expanded executable/declaration std IO surfaces with `append_file(path, content)`, `remove_file(path)`, `file_exists(path)`, `list_dir(path)`, `read_stdin_int()`, and `read_stdin_float()`.
 - MIR let-lowering now infers local types from initializer expressions when metadata is missing, preventing unsafe str temporary lowering.
 - Parser condition parsing now preserves full `given`/`while` boolean expressions while correctly respecting following blocks.
 - AST and MIR lowering now preserve control-flow nodes (`while`, `loop`, `each`) for ongoing runtime support expansion.

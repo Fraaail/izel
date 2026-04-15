@@ -5,7 +5,8 @@ This directory contains 100 uniquely implemented sample applications.
 Each file is intentionally different in structure, domain logic, and language-feature usage.
 Coverage spans core functionality from the project overview: bindings, control flow, contracts,
 effects, witnesses, zones, shapes, scrolls, weaves, generics, iterators/pipelines, macros,
-flow/tide async syntax, dual types, wards/modules, interactive stdin input, file operations,
+flow/tide async syntax, dual types, wards/modules, interactive stdin input, stdin numeric parsing,
+file operations (write/append/read/remove/exists/listing),
 and std runtime surfaces.
 
 ## Compile One Application
@@ -44,7 +45,7 @@ See `sample_applications/CAPABILITY_MATRIX.md` for a feature-to-app mapping tied
 | 010 | trip budget optimizer | witness proof flow |
 | 011 | sprint capacity planner | witness shape proof |
 | 012 | release burndown tracker | zones allocator |
-| 013 | customer churn monitor | memory intrinsic usage |
+| 013 | customer churn monitor | memory intrinsic usage + file utility intrinsics |
 | 014 | marketing roi estimator | shape and impl methods |
 | 015 | startup runway analyzer | scroll and branch |
 | 016 | cashflow guardrail | weave implementation |
@@ -114,7 +115,7 @@ See `sample_applications/CAPABILITY_MATRIX.md` for a feature-to-app mapping tied
 | 080 | last mile route budget | terminal dashboard |
 | 081 | learning progress tracker | contracts clamp |
 | 082 | exam readiness planner | contracts progression |
-| 083 | language practice scheduler | effects pipeline |
+| 083 | language practice scheduler | effects pipeline + stdin parsing |
 | 084 | reading habit dashboard | effects and stderr |
 | 085 | fitness training load | witness proof flow |
 | 086 | calorie budget calculator | witness shape proof |

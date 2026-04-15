@@ -15,10 +15,23 @@ forge main() -> int {
 
     let path = "sample_applications/runtime_013_customer_churn_monitor.txt"
     write_file(path, "churn-risk=medium")
+    append_file(path, "\nretention-action=coach")
+    println("file exists before remove")
+    println_int(file_exists(path))
     let loaded = read_file(path)
     println("file snapshot")
     println(loaded)
     free_str(loaded)
+
+    let listing = list_dir("sample_applications")
+    println("sample_applications listing")
+    print(listing)
+    free_str(listing)
+
+    println("remove status")
+    println_int(remove_file(path))
+    println("file exists after remove")
+    println_int(file_exists(path))
 
     give 0
 }

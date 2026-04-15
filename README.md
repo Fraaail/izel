@@ -131,6 +131,10 @@ Use `free_str(...)` after use (the std `println_int(...)` helper already handles
 `eprintln(...)` is stderr-backed in the runtime path, so stdout and stderr can be captured separately.
 `read_stdin()` and `read_file(path)` return owned runtime string buffers; call `free_str(...)` after use.
 `write_file(path, content)` writes content to disk and returns the byte count (or `-1` on open failure).
+`append_file(path, content)` appends bytes and returns the appended byte count (or `-1` on open failure).
+`remove_file(path)` mirrors libc remove semantics (`0` success, nonzero failure), and `file_exists(path)` returns `1` when a path is present.
+`list_dir(path)` returns an owned newline-delimited listing buffer that should be released with `free_str(...)` after use.
+`read_stdin_int()` and `read_stdin_float()` parse numeric input directly from stdin for interactive workflows.
 
 For frontend-only static serving (no runtime execution), use:
 
