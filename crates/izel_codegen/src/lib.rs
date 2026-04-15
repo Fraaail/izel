@@ -631,6 +631,194 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
 
                 self.builder.build_return(None)?;
             }
+            "io_read_stdin" => {
+                let malloc = self.get_malloc()?;
+                let memset = self.get_memset()?;
+                let read = self.get_read()?;
+
+                let capacity = self.context.i64_type().const_int(4096, false);
+                let read_len = self.context.i64_type().const_int(4095, false);
+                let zero_i32 = self.context.i32_type().const_int(0, false);
+
+                let buf_call = self
+                    .builder
+                    .build_call(malloc, &[capacity.into()], "stdin_buf")?;
+                let buf = buf_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("malloc did not return stdin buffer"))?
+                    .into_pointer_value();
+
+                self.builder.build_call(
+                    memset,
+                    &[buf.into(), zero_i32.into(), capacity.into()],
+                    "zero_stdin_buf",
+                )?;
+
+                let stdin_fd = self.context.i32_type().const_int(0, false);
+                self.builder.build_call(
+                    read,
+                    &[stdin_fd.into(), buf.into(), read_len.into()],
+                    "read_stdin",
+                )?;
+
+                self.builder.build_return(Some(&buf))?;
+            }
+            "io_read_file" => {
+                let path = function.get_nth_param(0).unwrap().into_pointer_value();
+                let malloc = self.get_malloc()?;
+                let memset = self.get_memset()?;
+                let fopen = self.get_fopen()?;
+                let fread = self.get_fread()?;
+                let fclose = self.get_fclose()?;
+
+                let mode = self.builder.build_global_string_ptr("rb", "fopen_rb")?;
+                let open_call = self.builder.build_call(
+                    fopen,
+                    &[path.into(), mode.as_pointer_value().into()],
+                    "fopen_read",
+                )?;
+                let file = open_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("fopen did not return file pointer"))?
+                    .into_pointer_value();
+
+                let file_as_int =
+                    self.builder
+                        .build_ptr_to_int(file, self.context.i64_type(), "file_as_int")?;
+                let file_is_null = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    file_as_int,
+                    self.context.i64_type().const_zero(),
+                    "file_is_null",
+                )?;
+
+                let fail_block = self.context.append_basic_block(function, "read_file_fail");
+                let read_block = self.context.append_basic_block(function, "read_file_read");
+                self.builder
+                    .build_conditional_branch(file_is_null, fail_block, read_block)?;
+
+                self.builder.position_at_end(fail_block);
+                let one = self.context.i64_type().const_int(1, false);
+                let zero_i32 = self.context.i32_type().const_int(0, false);
+                let empty_call =
+                    self.builder
+                        .build_call(malloc, &[one.into()], "empty_file_buf")?;
+                let empty = empty_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("malloc did not return empty-file buffer"))?
+                    .into_pointer_value();
+                self.builder.build_call(
+                    memset,
+                    &[empty.into(), zero_i32.into(), one.into()],
+                    "zero_empty_file_buf",
+                )?;
+                self.builder.build_return(Some(&empty))?;
+
+                self.builder.position_at_end(read_block);
+                let capacity = self.context.i64_type().const_int(65536, false);
+                let read_len = self.context.i64_type().const_int(65535, false);
+                let buf_call = self
+                    .builder
+                    .build_call(malloc, &[capacity.into()], "file_buf")?;
+                let buf = buf_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("malloc did not return file buffer"))?
+                    .into_pointer_value();
+
+                self.builder.build_call(
+                    memset,
+                    &[buf.into(), zero_i32.into(), capacity.into()],
+                    "zero_file_buf",
+                )?;
+
+                self.builder.build_call(
+                    fread,
+                    &[buf.into(), one.into(), read_len.into(), file.into()],
+                    "fread_file",
+                )?;
+                self.builder
+                    .build_call(fclose, &[file.into()], "fclose_read_file")?;
+                self.builder.build_return(Some(&buf))?;
+            }
+            "io_write_file" => {
+                let path = function.get_nth_param(0).unwrap().into_pointer_value();
+                let content = function.get_nth_param(1).unwrap().into_pointer_value();
+                let fopen = self.get_fopen()?;
+                let fwrite = self.get_fwrite()?;
+                let fclose = self.get_fclose()?;
+                let strlen = self.get_strlen()?;
+
+                let mode = self.builder.build_global_string_ptr("wb", "fopen_wb")?;
+                let open_call = self.builder.build_call(
+                    fopen,
+                    &[path.into(), mode.as_pointer_value().into()],
+                    "fopen_write",
+                )?;
+                let file = open_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("fopen did not return writable file pointer"))?
+                    .into_pointer_value();
+
+                let file_as_int = self.builder.build_ptr_to_int(
+                    file,
+                    self.context.i64_type(),
+                    "write_file_as_int",
+                )?;
+                let file_is_null = self.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    file_as_int,
+                    self.context.i64_type().const_zero(),
+                    "write_file_is_null",
+                )?;
+
+                let fail_block = self.context.append_basic_block(function, "write_file_fail");
+                let write_block = self
+                    .context
+                    .append_basic_block(function, "write_file_write");
+                self.builder
+                    .build_conditional_branch(file_is_null, fail_block, write_block)?;
+
+                self.builder.position_at_end(fail_block);
+                let err = self.context.i32_type().const_int((-1i64) as u64, true);
+                self.builder.build_return(Some(&err))?;
+
+                self.builder.position_at_end(write_block);
+                let one = self.context.i64_type().const_int(1, false);
+                let len_call = self
+                    .builder
+                    .build_call(strlen, &[content.into()], "write_len")?;
+                let len = len_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("strlen did not return content length"))?
+                    .into_int_value();
+
+                let write_call = self.builder.build_call(
+                    fwrite,
+                    &[content.into(), one.into(), len.into(), file.into()],
+                    "fwrite_file",
+                )?;
+                let written = write_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("fwrite did not return written count"))?
+                    .into_int_value();
+
+                self.builder
+                    .build_call(fclose, &[file.into()], "fclose_write_file")?;
+
+                let written_i32 = self.builder.build_int_truncate(
+                    written,
+                    self.context.i32_type(),
+                    "written_i32",
+                )?;
+                self.builder.build_return(Some(&written_i32))?;
+            }
             "io_print_newline" => {
                 let printf = self.get_printf()?;
                 let format_str = self.builder.build_global_string_ptr("\n", "format_nl")?;
@@ -768,6 +956,101 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
             .ptr_type(inkwell::AddressSpace::from(0));
         let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into(), i64_type.into()], false);
         Ok(self.module.add_function("write", fn_type, None))
+    }
+
+    fn get_read(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("read") {
+            return Ok(f);
+        }
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = i64_type.fn_type(&[i32_type.into(), ptr_type.into(), i64_type.into()], false);
+        Ok(self.module.add_function("read", fn_type, None))
+    }
+
+    fn get_fopen(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("fopen") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        Ok(self.module.add_function("fopen", fn_type, None))
+    }
+
+    fn get_fread(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("fread") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        Ok(self.module.add_function("fread", fn_type, None))
+    }
+
+    fn get_fwrite(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("fwrite") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        Ok(self.module.add_function("fwrite", fn_type, None))
+    }
+
+    fn get_fclose(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("fclose") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let fn_type = i32_type.fn_type(&[ptr_type.into()], false);
+        Ok(self.module.add_function("fclose", fn_type, None))
+    }
+
+    fn get_memset(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("memset") {
+            return Ok(f);
+        }
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
+        let fn_type = ptr_type.fn_type(&[ptr_type.into(), i32_type.into(), i64_type.into()], false);
+        Ok(self.module.add_function("memset", fn_type, None))
     }
 
     fn get_snprintf(&self) -> Result<FunctionValue<'ctx>> {
@@ -1181,6 +1464,30 @@ mod tests {
                 Type::Prim(PrimType::Void),
             ))),
             HirItem::Forge(Box::new(intrinsic_forge(
+                119,
+                "read_stdin",
+                "io_read_stdin",
+                vec![],
+                Type::Prim(PrimType::Str),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
+                120,
+                "read_file",
+                "io_read_file",
+                vec![param(121, "path", Type::Prim(PrimType::Str))],
+                Type::Prim(PrimType::Str),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
+                122,
+                "write_file",
+                "io_write_file",
+                vec![
+                    param(123, "path", Type::Prim(PrimType::Str)),
+                    param(124, "content", Type::Prim(PrimType::Str)),
+                ],
+                Type::Prim(PrimType::I32),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
                 113,
                 "i32_to_str",
                 "i32_to_str",
@@ -1238,11 +1545,20 @@ mod tests {
         assert!(ir.contains("define void @_iz_print_nl()"));
         assert!(ir.contains("define void @_iz_print_str(ptr %0)"));
         assert!(ir.contains("define void @_iz_eprint_str(ptr %0)"));
+        assert!(ir.contains("define ptr @_iz_read_stdin()"));
+        assert!(ir.contains("define ptr @_iz_read_file(ptr %0)"));
+        assert!(ir.contains("define i32 @_iz_write_file(ptr %0, ptr %1)"));
         assert!(ir.contains("define ptr @_iz_i32_to_str(i32 %0)"));
         assert!(ir.contains("define void @_iz_free_str(ptr %0)"));
         assert!(ir.contains("declare i32 @printf(ptr, ...)"));
+        assert!(ir.contains("declare i64 @read(i32, ptr, i64)"));
         assert!(ir.contains("declare i64 @strlen(ptr)"));
         assert!(ir.contains("declare i64 @write(i32, ptr, i64)"));
+        assert!(ir.contains("declare ptr @fopen(ptr, ptr)"));
+        assert!(ir.contains("declare i64 @fread(ptr, i64, i64, ptr)"));
+        assert!(ir.contains("declare i64 @fwrite(ptr, i64, i64, ptr)"));
+        assert!(ir.contains("declare i32 @fclose(ptr)"));
+        assert!(ir.contains("declare ptr @memset(ptr, i32, i64)"));
         assert!(ir.contains("declare i32 @snprintf(ptr, i64, ptr, ...)"));
         assert!(ir.contains("declare ptr @malloc(i64)"));
         assert!(ir.contains("declare void @free(ptr)"));
@@ -1283,6 +1599,48 @@ mod tests {
         assert_eq!(
             write1.as_global_value().as_pointer_value(),
             write2.as_global_value().as_pointer_value()
+        );
+
+        let read1 = codegen.get_read()?;
+        let read2 = codegen.get_read()?;
+        assert_eq!(
+            read1.as_global_value().as_pointer_value(),
+            read2.as_global_value().as_pointer_value()
+        );
+
+        let fopen1 = codegen.get_fopen()?;
+        let fopen2 = codegen.get_fopen()?;
+        assert_eq!(
+            fopen1.as_global_value().as_pointer_value(),
+            fopen2.as_global_value().as_pointer_value()
+        );
+
+        let fread1 = codegen.get_fread()?;
+        let fread2 = codegen.get_fread()?;
+        assert_eq!(
+            fread1.as_global_value().as_pointer_value(),
+            fread2.as_global_value().as_pointer_value()
+        );
+
+        let fwrite1 = codegen.get_fwrite()?;
+        let fwrite2 = codegen.get_fwrite()?;
+        assert_eq!(
+            fwrite1.as_global_value().as_pointer_value(),
+            fwrite2.as_global_value().as_pointer_value()
+        );
+
+        let fclose1 = codegen.get_fclose()?;
+        let fclose2 = codegen.get_fclose()?;
+        assert_eq!(
+            fclose1.as_global_value().as_pointer_value(),
+            fclose2.as_global_value().as_pointer_value()
+        );
+
+        let memset1 = codegen.get_memset()?;
+        let memset2 = codegen.get_memset()?;
+        assert_eq!(
+            memset1.as_global_value().as_pointer_value(),
+            memset2.as_global_value().as_pointer_value()
         );
 
         let free1 = codegen.get_free()?;

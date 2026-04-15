@@ -12,5 +12,13 @@ forge main() -> int {
     let blocks = app013_customer_churn_monitor_simulate_buffer(109)
     println("buffer blocks")
     println_int(blocks)
+
+    let path = "sample_applications/runtime_013_customer_churn_monitor.txt"
+    write_file(path, "churn-risk=medium")
+    let loaded = read_file(path)
+    println("file snapshot")
+    println(loaded)
+    free_str(loaded)
+
     give 0
 }

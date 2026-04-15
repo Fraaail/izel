@@ -5,7 +5,8 @@ This directory contains 100 uniquely implemented sample applications.
 Each file is intentionally different in structure, domain logic, and language-feature usage.
 Coverage spans core functionality from the project overview: bindings, control flow, contracts,
 effects, witnesses, zones, shapes, scrolls, weaves, generics, iterators/pipelines, macros,
-flow/tide async syntax, dual types, wards/modules, and std runtime surfaces.
+flow/tide async syntax, dual types, wards/modules, interactive stdin input, file operations,
+and std runtime surfaces.
 
 ## Compile One Application
 

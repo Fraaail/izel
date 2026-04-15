@@ -25,6 +25,22 @@ fn temp_iz_file(content: &str) -> PathBuf {
     path
 }
 
+fn temp_data_file_path(prefix: &str, ext: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after UNIX epoch")
+        .as_nanos();
+    path.push(format!(
+        "izel-driver-runtime-data-{}-{}-{}.{}",
+        prefix,
+        std::process::id(),
+        nonce,
+        ext
+    ));
+    path
+}
+
 fn run_izelc_from_repo(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_izelc"))
         .args(args)
@@ -148,4 +164,53 @@ forge main() -> int {
 
     assert_eq!(runtime_stdout, stdout_snapshot);
     assert_eq!(stderr, stderr_snapshot);
+}
+
+#[test]
+fn runtime_io_file_roundtrip_snapshot() {
+    let data_path = temp_data_file_path("roundtrip", "txt");
+    let escaped_path = data_path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+
+    let source = format!(
+        r#"draw std/io
+
+forge main() -> int {{
+    let path = "{path}"
+    write_file(path, "alpha-line")
+    let loaded = read_file(path)
+    println(loaded)
+    free_str(loaded)
+    give 0
+}}
+"#,
+        path = escaped_path
+    );
+
+    let input = temp_iz_file(&source);
+    let input_arg = input.to_string_lossy().to_string();
+
+    let output = run_izelc_from_repo(&["--run", &input_arg]);
+    let _ = fs::remove_file(&input);
+
+    assert!(
+        output.status.success(),
+        "compile+run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let runtime_stdout = extract_runtime_stdout(&stdout);
+    assert_eq!(runtime_stdout, "alpha-line\n");
+    assert_eq!(stderr, "");
+
+    let written = fs::read_to_string(&data_path).expect("runtime should create output file");
+    assert_eq!(written, "alpha-line");
+
+    let _ = fs::remove_file(&data_path);
 }

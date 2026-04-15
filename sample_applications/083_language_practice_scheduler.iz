@@ -1,13 +1,13 @@
 draw std/io
 
-forge app083_language_practice_scheduler_emit(_value: int) !io {
-}
+forge main() -> int {
+    println("083: language practice scheduler")
+    println("input prompt: type lesson tag and press enter")
 
-forge app083_language_practice_scheduler_report(v1: int, v2: int) !io {
-    app083_language_practice_scheduler_emit(v1)
-    app083_language_practice_scheduler_emit(v2)
-}
+    let line = read_stdin()
+    println("echo")
+    println(line)
+    free_str(line)
 
-forge main() !io {
-    app083_language_practice_scheduler_report(319, 206)
+    give 0
 }

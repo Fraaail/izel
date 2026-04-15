@@ -30,3 +30,12 @@ forge println_int(val: int) {
 
 @intrinsic("io_eprint_str")
 forge eprintln(msg: str)
+
+@intrinsic("io_read_stdin")
+forge read_stdin() -> str
+
+@intrinsic("io_read_file")
+forge read_file(path: str) -> str
+
+@intrinsic("io_write_file")
+forge write_file(path: str, content: str) -> int

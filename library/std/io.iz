@@ -33,3 +33,6 @@ forge println(msg: str)
 forge println_owned(msg: str)
 forge println_int(val: int)
 forge eprintln(msg: str)
+forge read_stdin() -> str
+forge read_file(path: str) -> str
+forge write_file(path: str, content: str) -> int
