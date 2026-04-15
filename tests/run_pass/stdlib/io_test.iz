@@ -1,7 +1,7 @@
 draw std/io
 
 forge main() -> int {
-    println(42)
-    println(1337)
+    println("Hello from std/io")
+    println_int(42)
     give 0
 }

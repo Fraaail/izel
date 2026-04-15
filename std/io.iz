@@ -1,10 +1,21 @@
+@intrinsic("io_print_str")
+forge print(msg: str)
+
 @intrinsic("io_print_int")
-forge print(val: int)
+forge print_int(val: int)
+
+@intrinsic("i32_to_str")
+forge to_str(val: int) -> str
 
 @intrinsic("io_print_newline")
 forge println_newline()
 
-forge println(val: int) {
-    print(val)
+forge println(msg: str) {
+    print(msg)
+    println_newline()
+}
+
+forge println_int(val: int) {
+    print(to_str(val))
     println_newline()
 }

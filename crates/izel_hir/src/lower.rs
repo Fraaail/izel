@@ -155,7 +155,6 @@ impl<'a> HirLowerer<'a> {
                 let def_id = self.get_def_id(name_span);
 
                 let ty = self.get_type(def_id);
-                eprintln!("HIR Let: name={}, def_id={:?}, ty={:?}", name, def_id, ty);
 
                 HirStmt::Let {
                     name,

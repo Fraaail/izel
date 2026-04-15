@@ -24,5 +24,6 @@ weave Printable for Status {
 }
 
 forge main() {
+    std::io::println("Hello from Izel")
     let x = 1 + 2;
 }

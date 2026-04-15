@@ -253,7 +253,15 @@ impl<'ctx, 'a> MirCodegen<'ctx, 'a> {
                 Constant::Bool(b) => {
                     Ok(self.context.bool_type().const_int(*b as u64, false).into())
                 }
-                Constant::Str(_) => Err(anyhow!("String constants not yet implemented in codegen")),
+                Constant::Str(s) => {
+                    let literal = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+                        &s[1..s.len() - 1]
+                    } else {
+                        s.as_str()
+                    };
+                    let global = self.builder.build_global_string_ptr(literal, "str_const")?;
+                    Ok(global.as_pointer_value().into())
+                }
             },
         }
     }
@@ -321,6 +329,10 @@ pub fn llvm_type_static<'ctx>(
             PrimType::F32 => Ok(context.f32_type().into()),
             PrimType::F64 => Ok(context.f64_type().into()),
             PrimType::Bool => Ok(context.bool_type().into()),
+            PrimType::Str => Ok(context
+                .i8_type()
+                .ptr_type(inkwell::AddressSpace::from(0))
+                .into()),
             PrimType::Void => Err(anyhow!("Cannot represent void as basic type")),
             _ => Ok(context.i32_type().into()),
         },
@@ -500,12 +512,48 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
                 self.builder.build_call(printf, &printf_args, "printf")?;
                 self.builder.build_return(None)?;
             }
+            "io_print_str" => {
+                let val = function.get_nth_param(0).unwrap();
+                let printf = self.get_printf()?;
+                let format_str = self.builder.build_global_string_ptr("%s", "format_str")?;
+                let printf_args = [format_str.as_pointer_value().into(), val.into()];
+                self.builder.build_call(printf, &printf_args, "printf")?;
+                self.builder.build_return(None)?;
+            }
             "io_print_newline" => {
                 let printf = self.get_printf()?;
                 let format_str = self.builder.build_global_string_ptr("\n", "format_nl")?;
                 let printf_args = [format_str.as_pointer_value().into()];
                 self.builder.build_call(printf, &printf_args, "printf")?;
                 self.builder.build_return(None)?;
+            }
+            "i32_to_str" => {
+                let val = function.get_nth_param(0).unwrap().into_int_value();
+                let malloc = self.get_malloc()?;
+                let snprintf = self.get_snprintf()?;
+
+                let capacity = self.context.i64_type().const_int(32, false);
+                let buf_call = self
+                    .builder
+                    .build_call(malloc, &[capacity.into()], "str_buf")?;
+                let buf = buf_call
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| anyhow!("malloc did not return a buffer pointer"))?
+                    .into_pointer_value();
+
+                let format_str = self
+                    .builder
+                    .build_global_string_ptr("%d", "format_i32_to_str")?;
+                let snprintf_args = [
+                    buf.into(),
+                    capacity.into(),
+                    format_str.as_pointer_value().into(),
+                    val.into(),
+                ];
+                self.builder
+                    .build_call(snprintf, &snprintf_args, "snprintf")?;
+                self.builder.build_return(Some(&buf))?;
             }
             "mem_alloc" => {
                 let size = function.get_nth_param(0).unwrap().into_int_value();
@@ -576,6 +624,20 @@ impl<'ctx, 'a> Codegen<'ctx, 'a> {
         let size_type = self.context.i64_type(); // Runtime ABI uses 64-bit size_t.
         let fn_type = ptr_type.fn_type(&[size_type.into()], false);
         Ok(self.module.add_function("malloc", fn_type, None))
+    }
+
+    fn get_snprintf(&self) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function("snprintf") {
+            return Ok(f);
+        }
+        let i32_type = self.context.i32_type();
+        let ptr_type = self
+            .context
+            .i8_type()
+            .ptr_type(inkwell::AddressSpace::from(0));
+        let size_type = self.context.i64_type();
+        let fn_type = i32_type.fn_type(&[ptr_type.into(), size_type.into(), ptr_type.into()], true);
+        Ok(self.module.add_function("snprintf", fn_type, None))
     }
 
     fn get_free(&self) -> Result<FunctionValue<'ctx>> {
@@ -952,6 +1014,20 @@ mod tests {
                 Type::Prim(PrimType::Void),
             ))),
             HirItem::Forge(Box::new(intrinsic_forge(
+                111,
+                "print_str",
+                "io_print_str",
+                vec![param(112, "msg", Type::Prim(PrimType::Str))],
+                Type::Prim(PrimType::Void),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
+                113,
+                "i32_to_str",
+                "i32_to_str",
+                vec![param(114, "v", Type::Prim(PrimType::I32))],
+                Type::Prim(PrimType::Str),
+            ))),
+            HirItem::Forge(Box::new(intrinsic_forge(
                 103,
                 "alloc",
                 "mem_alloc",
@@ -993,7 +1069,10 @@ mod tests {
         let ir = codegen.emit_llvm_ir();
         assert!(ir.contains("define void @_iz_print_int(i32 %0)"));
         assert!(ir.contains("define void @_iz_print_nl()"));
+        assert!(ir.contains("define void @_iz_print_str(ptr %0)"));
+        assert!(ir.contains("define ptr @_iz_i32_to_str(i32 %0)"));
         assert!(ir.contains("declare i32 @printf(ptr, ...)"));
+        assert!(ir.contains("declare i32 @snprintf(ptr, i64, ptr, ...)"));
         assert!(ir.contains("declare ptr @malloc(i64)"));
         assert!(ir.contains("declare void @free(ptr)"));
         assert!(ir.contains("call double @llvm.ceil.f64(double %0)"));
@@ -1012,6 +1091,13 @@ mod tests {
         assert_eq!(
             malloc1.as_global_value().as_pointer_value(),
             malloc2.as_global_value().as_pointer_value()
+        );
+
+        let snprintf1 = codegen.get_snprintf()?;
+        let snprintf2 = codegen.get_snprintf()?;
+        assert_eq!(
+            snprintf1.as_global_value().as_pointer_value(),
+            snprintf2.as_global_value().as_pointer_value()
         );
 
         let free1 = codegen.get_free()?;
@@ -1192,12 +1278,10 @@ mod tests {
         let mut mir_codegen = MirCodegen::new(&context, &module, &builder);
         mir_codegen.gen_mir_body(function, &body)?;
 
-        let str_err = mir_codegen
+        let str_const = mir_codegen
             .gen_operand(&Operand::Constant(Constant::Str("x".to_string())), &body)
-            .expect_err("string constants are not yet supported in codegen");
-        assert!(str_err
-            .to_string()
-            .contains("String constants not yet implemented"));
+            .expect("string constants should lower to global pointer values");
+        assert!(matches!(str_const, BasicValueEnum::PointerValue(_)));
 
         let ir = module.print_to_string().to_string();
         assert!(ir.contains("call i32 @_iz_callee(i32"));
@@ -1365,6 +1449,12 @@ mod tests {
         let f32 = llvm_type_static(&context, &Type::Prim(PrimType::F32))?;
         assert!(matches!(f32, inkwell::types::BasicTypeEnum::FloatType(_)));
 
+        let str_ptr = llvm_type_static(&context, &Type::Prim(PrimType::Str))?;
+        assert!(matches!(
+            str_ptr,
+            inkwell::types::BasicTypeEnum::PointerType(_)
+        ));
+
         Ok(())
     }
 
@@ -1465,20 +1555,41 @@ mod tests {
             vec![],
             Type::Prim(PrimType::Void),
         )));
-        let simd_sum = HirItem::Forge(Box::new(intrinsic_forge(
+        let io_print_str = HirItem::Forge(Box::new(intrinsic_forge(
             907,
+            "print_str",
+            "io_print_str",
+            vec![param(908, "msg", Type::Prim(PrimType::Str))],
+            Type::Prim(PrimType::Void),
+        )));
+        let i32_to_str = HirItem::Forge(Box::new(intrinsic_forge(
+            909,
+            "i32_to_str",
+            "i32_to_str",
+            vec![param(910, "v", Type::Prim(PrimType::I32))],
+            Type::Prim(PrimType::Str),
+        )));
+        let simd_sum = HirItem::Forge(Box::new(intrinsic_forge(
+            911,
             "simd_sum",
             "simd_i32x4_sum",
             vec![
-                param(908, "a", Type::Prim(PrimType::I32)),
-                param(909, "b", Type::Prim(PrimType::I32)),
-                param(910, "c", Type::Prim(PrimType::I32)),
-                param(911, "d", Type::Prim(PrimType::I32)),
+                param(912, "a", Type::Prim(PrimType::I32)),
+                param(913, "b", Type::Prim(PrimType::I32)),
+                param(914, "c", Type::Prim(PrimType::I32)),
+                param(915, "d", Type::Prim(PrimType::I32)),
             ],
             Type::Prim(PrimType::I32),
         )));
 
-        let items = [i32_abs, io_print_int, io_print_newline, simd_sum];
+        let items = [
+            i32_abs,
+            io_print_int,
+            io_print_newline,
+            io_print_str,
+            i32_to_str,
+            simd_sum,
+        ];
         for item in &items {
             codegen.declare_item(item)?;
             codegen.gen_item(item, &HashMap::new())?;
@@ -1487,6 +1598,7 @@ mod tests {
         let ir = codegen.emit_llvm_ir();
         assert!(ir.contains("@llvm.abs.i32"));
         assert!(ir.contains("@printf"));
+        assert!(ir.contains("@snprintf"));
         assert!(ir.contains("@llvm.vector.reduce.add.v4i32"));
         Ok(())
     }

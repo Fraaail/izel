@@ -99,6 +99,16 @@ npm run serve
 
 Then open `http://localhost:4173`.
 
+The playground Run action now performs frontend validation in WASM and then executes through a local runtime endpoint (`/api/run`) backed by `izel_driver --run`.
+This runtime path supports string literals, so programs like `println("Hello from Izel")` execute in the playground.
+
+For frontend-only static serving (no runtime execution), use:
+
+```bash
+cd tools/playground
+npm run serve:static
+```
+
 ## Syntax Highlighting (VS Code)
 
 An installable VS Code package is provided at `tools/grammar/vscode-izel`.

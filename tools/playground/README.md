@@ -26,4 +26,16 @@ npm run serve
 
 Then open http://localhost:4173.
 
-The Run action (or Cmd/Ctrl+Enter) tokenizes, parses, lowers, and type-checks the source and prints diagnostics.
+The Run action (or Cmd/Ctrl+Enter) performs two stages:
+
+1. Frontend validation in WASM (tokenize, parse, lower, typecheck).
+2. Runtime execution through a local API endpoint (`POST /api/run`) served by `server.js`, which runs `izel_driver --run` on a temporary source file.
+
+The runtime path supports string literals, so `println("hello")` style examples execute end-to-end.
+
+If you want frontend-only behavior, use:
+
+```bash
+cd tools/playground
+npm run serve:static
+```

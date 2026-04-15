@@ -9,9 +9,13 @@ All notable changes to this project will be documented in this file.
 - Expanded normative and compatibility content under `docs/spec/`.
 - Added concrete compile-pass/compile-fail fixtures replacing empty keep-files.
 - Added broader `izel_pm` parser and CLI branch coverage tests.
+- Added LLVM codegen support for MIR string constants and string primitive lowering.
+- Added runtime intrinsics for string printing (`io_print_str`) and integer to string conversion (`i32_to_str`).
 
 ### Changed
 - Replaced transitional dual round-trip test body generation with an empty, valid body.
 - Type checker now records inferred expression types in `expr_types`.
 - MIR codegen now emits LLVM phi handling instead of no-op fallback behavior.
+- Updated runtime `std/io` to expose string-first `println` and integer helper `println_int`.
+- Playground runtime/docs now reflect end-to-end support for string literal `println` execution.
 

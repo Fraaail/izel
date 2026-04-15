@@ -9,16 +9,17 @@
 <body>
   <main class="shell">
     <h1>Izel Playground</h1>
-    <p class="subtitle">WASM-compiled frontend playground</p>
-    <textarea id="source" spellcheck="false">draw std::io
+    <p class="subtitle">WASM frontend + local native runtime</p>
+    <textarea id="source" spellcheck="false">draw std/io
 
-forge main() !io {
-    std::io::println("Hello, Izel Playground")
+forge main() -> int {
+    println("Hello from Izel playground")
+    give 0
 }</textarea>
     <div class="actions">
       <button id="run">Run</button>
     </div>
-    <pre id="output">Ready. Click Run to tokenize, parse, and typecheck.</pre>
+    <pre id="output">Ready. Click Run to validate and execute.</pre>
   </main>
   <script type="module" src="main.js"></script>
 </body>
