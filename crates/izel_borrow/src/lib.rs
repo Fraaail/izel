@@ -395,10 +395,8 @@ impl LivenessAnalysis {
 
     fn get_operand_use(op: &Operand, uses: &mut FxHashSet<Local>, defs: &FxHashSet<Local>) {
         match op {
-            Operand::Copy(local) | Operand::Move(local) => {
-                if !defs.contains(local) {
-                    uses.insert(*local);
-                }
+            Operand::Copy(local) | Operand::Move(local) if !defs.contains(local) => {
+                uses.insert(*local);
             }
             _ => {}
         }
